@@ -9,6 +9,7 @@ from capture import ScreenCapture
 from engine import RIFEEngine
 from ui import GameSelectorUI
 from selector import WindowSelector
+from filters import AMDFilters
 import win32gui
 import win32con
 import win32api
@@ -38,8 +39,9 @@ class FrameGenerationApp:
         self.scale_factor = 1.0
         self.upscale_algo = cv2.INTER_LINEAR
         self.sharpness = 0.3
-        self.internal_res = (1280, 720) # Default target resolution for processing
+        self.internal_res = (800, 600) # Default target resolution for processing
         self.display_dim = (1280, 720) # Actual output dimensions
+        self.fsr_mode = False # Toggle for AMD CAS/EASU
 
     def capture_worker(self):
         print("Capture worker started")
@@ -96,11 +98,9 @@ class FrameGenerationApp:
                 # Internal Scaling: Downscale frame if it's too large for processing
                 h, w = current_frame.shape[:2]
                 if w > self.internal_res[0] or h > self.internal_res[1]:
-                    # Using INTER_LINEAR for quality
-                    # But if we really need speed, INTER_NEAREST
                     current_frame = cv2.resize(current_frame, self.internal_res, interpolation=cv2.INTER_LINEAR)
 
-                if last_frame is not None:
+                if self.fg_enabled and last_frame is not None:
                     inter_frame = self.engine.interpolate(last_frame, current_frame)
                     
                     self.process_queue.put(inter_frame)
@@ -118,15 +118,20 @@ class FrameGenerationApp:
             if not self.process_queue.empty():
                 frame = self.process_queue.get()
                 
-                # High-Speed Resizing to match display
-                # We do this in the worker thread to leave the main thread free for blitting
-                if frame.shape[1] != self.display_dim[0] or frame.shape[0] != self.display_dim[1]:
-                    frame = cv2.resize(frame, self.display_dim, interpolation=self.upscale_algo)
-                
-                # Apply sharpening (expensive) in this thread
-                if self.sharpness > 0:
-                    blurred = cv2.GaussianBlur(frame, (0, 0), 3)
-                    frame = cv2.addWeighted(frame, 1.0 + self.sharpness, blurred, -self.sharpness, 0)
+                # High-Speed Resizing (EASU-style if FSR mode enabled)
+                if self.fsr_mode:
+                    if frame.shape[1] != self.display_dim[0] or frame.shape[0] != self.display_dim[1]:
+                        frame = AMDFilters.apply_easu(frame, self.display_dim)
+                    else:
+                        frame = AMDFilters.apply_cas(frame, self.sharpness)
+                else:
+                    if frame.shape[1] != self.display_dim[0] or frame.shape[0] != self.display_dim[1]:
+                        frame = cv2.resize(frame, self.display_dim, interpolation=self.upscale_algo)
+                    
+                    # Apply simple sharpening (Fallback)
+                    if self.sharpness > 0:
+                        blurred = cv2.GaussianBlur(frame, (0, 0), 3)
+                        frame = cv2.addWeighted(frame, 1.0 + self.sharpness, blurred, -self.sharpness, 0)
 
                 # Push to display
                 if self.display_queue.full():
@@ -158,6 +163,10 @@ class FrameGenerationApp:
         if algo_val == "Bilinear": self.upscale_algo = cv2.INTER_LINEAR
         elif algo_val == "Bicubic": self.upscale_algo = cv2.INTER_CUBIC
         elif algo_val == "Lanczos": self.upscale_algo = cv2.INTER_LANCZOS4
+        elif "FSR" in algo_val:
+            self.fsr_mode = True
+            
+        self.fg_enabled = self.target_window.get("fg_enabled", True)
         
         self.sharpness = self.target_window["sharpness"] / 100.0 * 2.0 # Scale 0-100 to 0.0-2.0
 
@@ -165,9 +174,9 @@ class FrameGenerationApp:
         rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
         self.capture.region = rect
         
-        # Performance tuning: Set internal resolution limit
+        # Performance tuning: Set internal resolution limit (800x600 for max speed)
         w, h = rect[2] - rect[0], rect[3] - rect[1]
-        if w > 1280: self.internal_res = (1280, 720)
+        if w > 800: self.internal_res = (800, 600)
         else: self.internal_res = (w, h)
         
         # Initial display dimensions
@@ -318,11 +327,24 @@ class FrameGenerationApp:
                             self.show_fps = not self.show_fps
                             self.hotkey_cooldown = time.time()
                     
+                    if win32api.GetAsyncKeyState(0x78) & 0x8000: # F9
+                        if time.time() - self.hotkey_cooldown > 0.3:
+                            self.fsr_mode = not self.fsr_mode
+                            self.hotkey_cooldown = time.time()
+                            print(f"FSR Mode: {'ON' if self.fsr_mode else 'OFF'}")
+                    
                     if self.show_fps:
-                        fps_text = font.render(f"FPS: {self.current_fps:.1f}", True, (0, 255, 0))
-                        bg_rect = fps_text.get_rect(topleft=(10, 10))
-                        pygame.draw.rect(screen, (0, 0, 0), bg_rect.inflate(10, 5))
-                        screen.blit(fps_text, (10, 10))
+                        status_color = (0, 255, 0)
+                        fps_text = font.render(f"FPS: {self.current_fps:.1f}", True, status_color)
+                        fsr_text = font.render(f"FSR: {'ON' if self.fsr_mode else 'OFF'}", True, (255, 200, 0) if self.fsr_mode else (150, 150, 150))
+                        
+                        # Draw status box
+                        bg_rect = pygame.Rect(10, 10, 150, 60)
+                        pygame.draw.rect(screen, (0, 0, 0), bg_rect)
+                        pygame.draw.rect(screen, (50, 50, 50), bg_rect, 2)
+                        
+                        screen.blit(fps_text, (20, 15))
+                        screen.blit(fsr_text, (20, 40))
 
                     pygame.display.flip()
                     

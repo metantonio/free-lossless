@@ -6,7 +6,7 @@ class GameSelectorUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Lossless Frame Gen - Select Game")
-        self.root.geometry("500x700")
+        self.root.geometry("500x900")
         
         self.selected_window = None
         self.selector = WindowSelector()
@@ -15,13 +15,29 @@ class GameSelectorUI:
         self._refresh_list()
 
     def _setup_ui(self):
-        label = tk.Label(self.root, text="Select the game window to apply Frame Generation:", pady=10)
-        label.pack()
+        # Professional Header & Instructions
+        header = tk.Frame(self.root, pady=10)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="Lossless Frame Generation", font=("Arial", 14, "bold"), fg="#2196F3").pack()
+        
+        instr_text = (
+            "Instrucciones:\n"
+            "1. Selecciona la ventana del juego abajo.\n"
+            "2. Ajusta el Target FPS (60-120 recomendado).\n"
+            "3. Presiona 'Start' para iniciar el overlay.\n\n"
+            "Comandos Globales:\n"
+            "• [F9]  Alternar FSR (AMD CAS)\n"
+            "• [F10] Mostrar/Ocultar Contador FPS\n"
+            "• [F11] Detener y Volver al Menú"
+        )
+        tk.Label(header, text=instr_text, justify=tk.LEFT, font=("Arial", 9), fg="#555", padx=20).pack(anchor="w")
+
+        tk.Label(self.root, text="Ventanas Detectadas:", font=("Arial", 10, "bold")).pack(anchor="w", padx=10, pady=(10,0))
 
         # Listbox
         self.tree = ttk.Treeview(self.root, columns=("Title", "Process"), show="headings")
-        self.tree.heading("Title", text="Window Title")
-        self.tree.heading("Process", text="Process Name")
+        self.tree.heading("Title", text="Título de Ventana")
+        self.tree.heading("Process", text="Proceso")
         self.tree.column("Title", width=300)
         self.tree.column("Process", width=150)
         self.tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
@@ -54,8 +70,16 @@ class GameSelectorUI:
         algo_frame.pack()
         tk.Label(algo_frame, text="Algorithm: ").grid(row=0, column=0)
         self.algo_var = tk.StringVar(value="Lanczos")
-        self.algo_combo = ttk.Combobox(algo_frame, textvariable=self.algo_var, values=["Bilinear", "Bicubic", "Lanczos"], state="readonly", width=12)
+        self.algo_combo = ttk.Combobox(algo_frame, textvariable=self.algo_var, values=["Bilinear", "Bicubic", "Lanczos", "FSR 1.0 / CAS (Nitidez)"], state="readonly", width=18)
         self.algo_combo.grid(row=0, column=1)
+        self.algo_combo.bind("<<ComboboxSelected>>", self._on_algo_change)
+
+        # Frame Generation Toggle (RIFE)
+        fg_frame = tk.Frame(self.root, pady=5)
+        fg_frame.pack()
+        self.fg_var = tk.BooleanVar(value=True)
+        self.fg_check = tk.Checkbutton(fg_frame, text="Generación de Frames (Motor RIFE)", variable=self.fg_var)
+        self.fg_check.pack()
 
         # Sharpening Selection
         sharp_frame = tk.Frame(self.root, pady=5)
@@ -96,9 +120,15 @@ class GameSelectorUI:
                 "fps": self.fps_var.get(),
                 "scale": self.scale_var.get(),
                 "algo": self.algo_var.get(),
-                "sharpness": self.sharp_var.get()
+                "sharpness": self.sharp_var.get(),
+                "fg_enabled": self.fg_var.get()
             }
             self.root.destroy()
+
+    def _on_algo_change(self, event=None):
+        # We no longer force-disable FG. 
+        # User can choose both for best quality/performance combo.
+        pass
 
     def get_selection(self):
         self.root.mainloop()
