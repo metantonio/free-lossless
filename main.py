@@ -40,6 +40,10 @@ class FrameGenerationApp:
 
     def capture_worker(self):
         print("Capture worker started")
+        last_frame = None
+        # Capture at half the target FPS because we interpolate 1 extra frame
+        capture_interval = 1.0 / (self.target_fps / 2) if self.target_fps > 0 else 1.0/30.0
+        
         while self.running:
             # Update region based on window position
             if self.target_window:
@@ -51,14 +55,32 @@ class FrameGenerationApp:
                     self.running = False
                     break
             
+            start_time = time.time()
             frame = self.capture.capture_frame()
-            if frame is not None:
-                if self.capture_queue.full():
-                    self.capture_queue.get()
-                self.capture_queue.put(frame)
             
-            # FPS control for capture
-            time.sleep(1/(self.target_fps)) 
+            if frame is not None:
+                # Check for duplicates (quick check)
+                is_duplicate = False
+                if last_frame is not None:
+                    # Sample some pixels for speed
+                    try:
+                        if np.array_equal(frame[10:20, 10:20], last_frame[10:20, 10:20]):
+                            # If samples match, do a full check or just trust the sample
+                            # Full check is safer but slower. Let's do a slightly larger sample.
+                            if np.array_equal(frame[::50, ::50], last_frame[::50, ::50]):
+                                is_duplicate = True
+                    except: pass
+                
+                if not is_duplicate:
+                    if self.capture_queue.full():
+                        try: self.capture_queue.get_nowait()
+                        except: pass
+                    self.capture_queue.put(frame)
+                    last_frame = frame
+                
+            elapsed = time.time() - start_time
+            sleep_time = max(0, capture_interval - elapsed)
+            time.sleep(sleep_time)
 
     def processing_worker(self):
         print("Processing worker started")
@@ -195,14 +217,11 @@ class FrameGenerationApp:
                     frame = self.display_queue.get()
                     
                     # Handle window resizing and position sync
-                    c_h, c_w, _ = frame.shape
-                    
                     try:
                         t_rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
                         t_cap_w, t_cap_h = t_rect[2] - t_rect[0], t_rect[3] - t_rect[1]
                         
-                        # Target display size
-                        if self.scale_factor == -1: # Fullscreen
+                        if self.scale_factor == -1:
                             t_w, t_h = screen.get_size()
                         else:
                             t_w, t_h = int(t_cap_w * self.scale_factor), int(t_cap_h * self.scale_factor)
@@ -211,37 +230,31 @@ class FrameGenerationApp:
                             if (screen.get_width() != t_w or screen.get_height() != t_h) and self.scale_factor != -1:
                                 screen = pygame.display.set_mode((t_w, t_h), pygame.NOFRAME)
                                 hwnd_pygame = pygame.display.get_wm_info()["window"]
-                                # Re-apply styles
                                 try:
                                     ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_pygame, 0x00000011)
                                     ex_style = win32gui.GetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE)
                                     win32gui.SetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE, ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
                                 except: pass
                             
-                            if self.scale_factor != -1: # Only move if NOT in fullscreen
+                            if self.scale_factor != -1:
                                 win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, t_rect[0], t_rect[1], t_w, t_h, win32con.SWP_NOACTIVATE)
                             self.last_rect = t_rect
                         else:
-                            # Re-assert TopMost
                             win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, 0, 0, 0, 0, 
                                                 win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
                     except: pass
 
-                    # Apply Scaling
+                    # Scaling & Sharpening
                     if self.scale_factor != 1.0 or self.scale_factor == -1:
                         frame = cv2.resize(frame, (t_w, t_h), interpolation=self.upscale_algo)
-                    
-                    # Apply Sharpening (Nitidez)
                     if self.sharpness > 0:
-                        # Fast Unsharp Mask
                         blurred = cv2.GaussianBlur(frame, (0, 0), 3)
                         frame = cv2.addWeighted(frame, 1.0 + self.sharpness, blurred, -self.sharpness, 0)
 
                     surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
                     screen.blit(surface, (0, 0))
                     
-                    # 5. Render FPS Overlay if enabled
-                    # Toggle with F10 (VK_F10 = 0x79)
+                    # Hotkey F10 for FPS
                     if win32api.GetAsyncKeyState(0x79) & 0x8000:
                         if time.time() - self.hotkey_cooldown > 0.3:
                             self.show_fps = not self.show_fps
@@ -249,22 +262,19 @@ class FrameGenerationApp:
                     
                     if self.show_fps:
                         fps_text = font.render(f"FPS: {self.current_fps:.1f}", True, (0, 255, 0))
-                        # Simple background for readability
                         bg_rect = fps_text.get_rect(topleft=(10, 10))
                         pygame.draw.rect(screen, (0, 0, 0), bg_rect.inflate(10, 5))
                         screen.blit(fps_text, (10, 10))
-                    
-                    pygame.display.flip()
 
+                    pygame.display.flip()
+                    
                     self.frame_count += 1
-                    if self.frame_count % 60 == 0:
-                        elapsed = time.time() - self.start_time
-                        self.current_fps = self.frame_count / elapsed
-                        cap_q = self.capture_queue.qsize()
-                        dis_q = self.display_queue.qsize()
-                        print(f"Stats: FPS={self.current_fps:.2f}, CaptureQueue={cap_q}, DisplayQueue={dis_q}")
-                
-                clock.tick(self.target_fps * 2) 
+                    if self.frame_count % 30 == 0:
+                        end_time = time.time()
+                        self.current_fps = 30 / (end_time - self.start_time)
+                        self.start_time = end_time
+            
+                clock.tick(self.target_fps) 
         finally:
             self.running = False
             self.capture.stop_capture()
