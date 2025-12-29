@@ -7,42 +7,55 @@ class RIFEEngine:
         """
         Using OpenCV DISOpticalFlow as a fast fallback that works in real-time.
         """
-        self.dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_FAST)
-        print("Optical Flow Engine (DIS) initialized.")
+        self.dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_ULTRAFAST)
+        self.dis.setFinestScale(1)
+        self.dis.setGradientDescentIterations(10)
+        self.dis.setVariationalRefinementIterations(0) # Disable for speed
+        
+        self.last_h = 0
+        self.last_w = 0
+        self.map_x = None
+        self.map_y = None
+        
+        print("Optimized Optical Flow Engine (DIS ULTRAFAST) initialized.")
 
     def interpolate(self, frame1, frame2):
         """
         Interpolate between frame1 and frame2 using optical flow.
         """
-        # Convert to grayscale for flow calculation
+        h, w = frame1.shape[:2]
+        
+        # Convert to grayscale 
         gray1 = cv2.cvtColor(frame1, cv2.COLOR_RGB2GRAY)
         gray2 = cv2.cvtColor(frame2, cv2.COLOR_RGB2GRAY)
         
-        # Calculate flow
-        # We can use a lower resolution for flow to speed it up
+        # Calculate flow at lower resolution
         scale = 0.5
         small1 = cv2.resize(gray1, (0, 0), fx=scale, fy=scale)
         small2 = cv2.resize(gray2, (0, 0), fx=scale, fy=scale)
         
         flow = self.dis.calc(small1, small2, None)
         
-        # Scale flow back
+        # Scale and resize flow back
         flow = flow * (1.0 / scale)
-        flow = cv2.resize(flow, (frame1.shape[1], frame1.shape[0]))
+        flow = cv2.resize(flow, (w, h))
         
         # Warp frames (mid-way)
-        # For simplicity, we just warp frame1 by half-flow
         mid_flow = flow * 0.5
         
-        h, w = frame1.shape[:2]
-        map_x, map_y = np.meshgrid(np.arange(w), np.arange(h))
+        # Cache meshgrid to avoid reallocation
+        if h != self.last_h or w != self.last_w:
+            self.map_x, self.map_y = np.meshgrid(np.arange(w), np.arange(h))
+            self.map_x = self.map_x.astype(np.float32)
+            self.map_y = self.map_y.astype(np.float32)
+            self.last_h, self.last_w = h, w
         
         # Shift maps by mid_flow
-        map_x = (map_x + mid_flow[..., 0]).astype(np.float32)
-        map_y = (map_y + mid_flow[..., 1]).astype(np.float32)
+        m_x = self.map_x + mid_flow[..., 0]
+        m_y = self.map_y + mid_flow[..., 1]
         
         # Remap
-        inter_frame = cv2.remap(frame1, map_x, map_y, cv2.INTER_LINEAR)
+        inter_frame = cv2.remap(frame1, m_x, m_y, cv2.INTER_LINEAR)
         
         return inter_frame
 

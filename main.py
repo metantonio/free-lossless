@@ -76,10 +76,13 @@ class FrameGenerationApp:
         if not self.target_window:
             return False
         
+        # Re-initialize capture with correct mode
+        self.capture = ScreenCapture(mode=self.target_window["mode"])
+        
         # Initial region
         rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
         self.capture.region = rect
-        print(f"Targeting: {self.target_window['title']} at {rect}")
+        print(f"Targeting: {self.target_window['title']} using {self.target_window['mode']} at {rect}")
         return True
 
     def run(self):
@@ -131,7 +134,13 @@ class FrameGenerationApp:
                     if self.frame_count % 60 == 0:
                         elapsed = time.time() - self.start_time
                         self.current_fps = self.frame_count / elapsed
-                        pygame.display.set_caption(f"FG: {self.target_window['title']} - FPS: {self.current_fps:.2f}")
+                        
+                        # Add queue sizes for debugging
+                        cap_q = self.capture_queue.qsize()
+                        dis_q = self.display_queue.qsize()
+                        
+                        pygame.display.set_caption(f"FG: {self.target_window['title']} - FPS: {self.current_fps:.2f} | Q: {cap_q}/{dis_q}")
+                        print(f"Stats: FPS={self.current_fps:.2f}, CaptureQueue={cap_q}, DisplayQueue={dis_q}")
                 
                 clock.tick(self.target_fps * 1.5) # Allow display to be slightly faster than intake
         finally:
