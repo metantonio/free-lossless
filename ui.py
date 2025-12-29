@@ -6,7 +6,7 @@ class GameSelectorUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Lossless Frame Gen - Select Game")
-        self.root.geometry("500x400")
+        self.root.geometry("500x700")
         
         self.selected_window = None
         self.selector = WindowSelector()
