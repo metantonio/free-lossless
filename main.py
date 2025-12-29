@@ -11,6 +11,7 @@ from ui import GameSelectorUI
 from selector import WindowSelector
 import win32gui
 import win32con
+import win32api
 
 class FrameGenerationApp:
     def __init__(self, target_fps=60):
@@ -31,6 +32,8 @@ class FrameGenerationApp:
         
         # Window management
         self.last_rect = None
+        self.show_fps = True
+        self.hotkey_cooldown = 0
 
     def capture_worker(self):
         print("Capture worker started")
@@ -92,12 +95,12 @@ class FrameGenerationApp:
         rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
         self.capture.region = rect
         print(f"Targeting: {self.target_window['title']} using {self.target_window['mode']} at {self.target_fps} FPS")
+        print("Press F11 to stop generation and return to menu.")
         return True
 
     def run(self):
         if not self.select_game():
-            print("No game selected. Exiting.")
-            return
+            return False
 
         pygame.init()
         # Initial size
@@ -106,16 +109,19 @@ class FrameGenerationApp:
         
         if w <= 0 or h <= 0:
             print("Invalid window dimensions.")
-            return
+            return True
 
         # Setup Borderless Window
         screen = pygame.display.set_mode((w, h), pygame.NOFRAME)
         pygame.display.set_caption("FG Overlay")
         
+        # FPS Font
+        pygame.font.init()
+        font = pygame.font.SysFont("Arial", 24, bold=True)
+        
         hwnd_pygame = pygame.display.get_wm_info()["window"]
         
         # 1. Exclude this window from screen capture (Win 10+)
-        # This prevents the black feedback loop when capturing the same area
         try:
             WDA_EXCLUDEFROMCAPTURE = 0x00000011
             ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_pygame, WDA_EXCLUDEFROMCAPTURE)
@@ -123,7 +129,6 @@ class FrameGenerationApp:
             print(f"Capture exclusion not available: {e}")
 
         # 2. Make Click-Through
-        # WS_EX_TRANSPARENT + WS_EX_LAYERED allows mouse clicks to pass through
         ex_style = win32gui.GetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE)
         win32gui.SetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE, ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
 
@@ -135,6 +140,10 @@ class FrameGenerationApp:
         self.running = True
         self.start_time = time.time()
         
+        # Clear queues
+        while not self.capture_queue.empty(): self.capture_queue.get()
+        while not self.display_queue.empty(): self.display_queue.get()
+        
         t_cap = threading.Thread(target=self.capture_worker, daemon=True)
         t_proc = threading.Thread(target=self.processing_worker, daemon=True)
         t_cap.start()
@@ -142,6 +151,13 @@ class FrameGenerationApp:
         
         try:
             while self.running:
+                # 4. Check for Global Hotkey (F11)
+                # VK_F11 = 0x7A
+                if win32api.GetAsyncKeyState(0x7A) & 0x8000:
+                    print("Stop key pressed. Returning to menu...")
+                    self.running = False
+                    break
+
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         self.running = False
@@ -158,21 +174,18 @@ class FrameGenerationApp:
                         if self.last_rect != t_rect:
                             if (screen.get_width() != t_w or screen.get_height() != t_h):
                                 screen = pygame.display.set_mode((t_w, t_h), pygame.NOFRAME)
-                                # Refresh handle if recreated
                                 hwnd_pygame = pygame.display.get_wm_info()["window"]
-                                
-                                # Re-apply all styles
+                                # Re-apply styles
                                 try:
                                     ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_pygame, 0x00000011)
                                     ex_style = win32gui.GetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE)
                                     win32gui.SetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE, ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
-                                except:
-                                    pass
+                                except: pass
                             
                             win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, t_rect[0], t_rect[1], t_w, t_h, win32con.SWP_NOACTIVATE)
                             self.last_rect = t_rect
                         else:
-                            # Re-assert TopMost status every frame to prevent game from coming forward
+                            # Re-assert TopMost
                             win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, 0, 0, 0, 0, 
                                                 win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
                     except:
@@ -180,8 +193,23 @@ class FrameGenerationApp:
 
                     surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
                     screen.blit(surface, (0, 0))
-                    pygame.display.flip()
                     
+                    # 5. Render FPS Overlay if enabled
+                    # Toggle with F10 (VK_F10 = 0x79)
+                    if win32api.GetAsyncKeyState(0x79) & 0x8000:
+                        if time.time() - self.hotkey_cooldown > 0.3:
+                            self.show_fps = not self.show_fps
+                            self.hotkey_cooldown = time.time()
+                    
+                    if self.show_fps:
+                        fps_text = font.render(f"FPS: {self.current_fps:.1f}", True, (0, 255, 0))
+                        # Simple background for readability
+                        bg_rect = fps_text.get_rect(topleft=(10, 10))
+                        pygame.draw.rect(screen, (0, 0, 0), bg_rect.inflate(10, 5))
+                        screen.blit(fps_text, (10, 10))
+                    
+                    pygame.display.flip()
+
                     self.frame_count += 1
                     if self.frame_count % 60 == 0:
                         elapsed = time.time() - self.start_time
@@ -190,13 +218,18 @@ class FrameGenerationApp:
                         dis_q = self.display_queue.qsize()
                         print(f"Stats: FPS={self.current_fps:.2f}, CaptureQueue={cap_q}, DisplayQueue={dis_q}")
                 
-                # The display loop should be fast
                 clock.tick(self.target_fps * 2) 
         finally:
             self.running = False
             self.capture.stop_capture()
             pygame.quit()
+        
+        return True
 
 if __name__ == "__main__":
     app = FrameGenerationApp(target_fps=60)
-    app.run()
+    while True:
+        if not app.run():
+            break
+        print("Waiting for next selection...")
+        time.sleep(0.5)
