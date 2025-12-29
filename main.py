@@ -36,6 +36,7 @@ class FrameGenerationApp:
         self.hotkey_cooldown = 0
         self.scale_factor = 1.0
         self.upscale_algo = cv2.INTER_LINEAR
+        self.sharpness = 0.3 # 0.0 to 1.0 ideally
 
     def capture_worker(self):
         print("Capture worker started")
@@ -104,6 +105,8 @@ class FrameGenerationApp:
         if algo_val == "Bilinear": self.upscale_algo = cv2.INTER_LINEAR
         elif algo_val == "Bicubic": self.upscale_algo = cv2.INTER_CUBIC
         elif algo_val == "Lanczos": self.upscale_algo = cv2.INTER_LANCZOS4
+        
+        self.sharpness = self.target_window["sharpness"] / 100.0 * 2.0 # Scale 0-100 to 0.0-2.0
 
         # Initial region
         rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
@@ -227,6 +230,12 @@ class FrameGenerationApp:
                     # Apply Scaling
                     if self.scale_factor != 1.0 or self.scale_factor == -1:
                         frame = cv2.resize(frame, (t_w, t_h), interpolation=self.upscale_algo)
+                    
+                    # Apply Sharpening (Nitidez)
+                    if self.sharpness > 0:
+                        # Fast Unsharp Mask
+                        blurred = cv2.GaussianBlur(frame, (0, 0), 3)
+                        frame = cv2.addWeighted(frame, 1.0 + self.sharpness, blurred, -self.sharpness, 0)
 
                     surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
                     screen.blit(surface, (0, 0))

@@ -57,6 +57,14 @@ class GameSelectorUI:
         self.algo_combo = ttk.Combobox(algo_frame, textvariable=self.algo_var, values=["Bilinear", "Bicubic", "Lanczos"], state="readonly", width=12)
         self.algo_combo.grid(row=0, column=1)
 
+        # Sharpening Selection
+        sharp_frame = tk.Frame(self.root, pady=5)
+        sharp_frame.pack()
+        tk.Label(sharp_frame, text="Sharpening (Nitidez): ").grid(row=0, column=0)
+        self.sharp_var = tk.IntVar(value=30)
+        self.sharp_scale = tk.Scale(sharp_frame, from_=0, to=100, orient=tk.HORIZONTAL, variable=self.sharp_var, length=200)
+        self.sharp_scale.grid(row=0, column=1)
+
         # Buttons
         btn_frame = tk.Frame(self.root, pady=10)
         btn_frame.pack()
@@ -87,7 +95,8 @@ class GameSelectorUI:
                 "mode": self.mode_var.get(),
                 "fps": self.fps_var.get(),
                 "scale": self.scale_var.get(),
-                "algo": self.algo_var.get()
+                "algo": self.algo_var.get(),
+                "sharpness": self.sharp_var.get()
             }
             self.root.destroy()
 
