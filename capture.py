@@ -133,7 +133,8 @@ class ScreenCapture:
             
             # Return RGB (discard alpha and flip BGR if necessary)
             # This slice is much faster than cv2.cvtColor
-            return img[:, :, :3][:, :, ::-1] 
+            # We use .copy() to ensure the array is contiguous for Pygame frombuffer
+            return img[:, :, :3][:, :, ::-1].copy() 
             
         except Exception as e:
             self._cleanup_gdi()

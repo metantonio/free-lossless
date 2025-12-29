@@ -23,20 +23,23 @@ class FrameGenerationApp:
         
         # Queues for pipeline
         self.capture_queue = Queue(maxsize=3)
-        self.display_queue = Queue(maxsize=10) # Increased for triple buffering & smoothness
+        self.process_queue = Queue(maxsize=3)
+        self.display_queue = Queue(maxsize=20) # Buffer for smooth display
         
         # Stats
         self.frame_count = 0
         self.start_time = 0
         self.current_fps = 0
         
-        # Window management
+        # Window & Performance management
         self.last_rect = None
         self.show_fps = True
         self.hotkey_cooldown = 0
         self.scale_factor = 1.0
         self.upscale_algo = cv2.INTER_LINEAR
-        self.sharpness = 0.3 # 0.0 to 1.0 ideally
+        self.sharpness = 0.3
+        self.internal_res = (1280, 720) # Default target resolution for processing
+        self.display_dim = (1280, 720) # Actual output dimensions
 
     def capture_worker(self):
         print("Capture worker started")
@@ -90,22 +93,49 @@ class FrameGenerationApp:
             if not self.capture_queue.empty():
                 current_frame = self.capture_queue.get()
                 
+                # Internal Scaling: Downscale frame if it's too large for processing
+                h, w = current_frame.shape[:2]
+                if w > self.internal_res[0] or h > self.internal_res[1]:
+                    # Using INTER_LINEAR for quality
+                    # But if we really need speed, INTER_NEAREST
+                    current_frame = cv2.resize(current_frame, self.internal_res, interpolation=cv2.INTER_LINEAR)
+
                 if last_frame is not None:
                     inter_frame = self.engine.interpolate(last_frame, current_frame)
                     
-                    if self.display_queue.full():
-                        self.display_queue.get()
-                    self.display_queue.put(inter_frame)
-                    
-                    if self.display_queue.full():
-                        self.display_queue.get()
-                    self.display_queue.put(current_frame)
+                    self.process_queue.put(inter_frame)
+                    self.process_queue.put(current_frame)
                 else:
-                    self.display_queue.put(current_frame)
+                    self.process_queue.put(current_frame)
                 
                 last_frame = current_frame
             else:
                 time.sleep(0.001)
+
+    def post_processing_worker(self):
+        print("Post-processing worker started")
+        while self.running:
+            if not self.process_queue.empty():
+                frame = self.process_queue.get()
+                
+                # High-Speed Resizing to match display
+                # We do this in the worker thread to leave the main thread free for blitting
+                if frame.shape[1] != self.display_dim[0] or frame.shape[0] != self.display_dim[1]:
+                    frame = cv2.resize(frame, self.display_dim, interpolation=self.upscale_algo)
+                
+                # Apply sharpening (expensive) in this thread
+                if self.sharpness > 0:
+                    blurred = cv2.GaussianBlur(frame, (0, 0), 3)
+                    frame = cv2.addWeighted(frame, 1.0 + self.sharpness, blurred, -self.sharpness, 0)
+
+                # Push to display
+                if self.display_queue.full():
+                    try: self.display_queue.get_nowait()
+                    except: pass
+                self.display_queue.put(frame)
+            else:
+                # Slight sleep to reduce CPU usage when idle
+                time.sleep(0.0005)
 
     def select_game(self):
         ui = GameSelectorUI()
@@ -134,6 +164,19 @@ class FrameGenerationApp:
         # Initial region
         rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
         self.capture.region = rect
+        
+        # Performance tuning: Set internal resolution limit
+        w, h = rect[2] - rect[0], rect[3] - rect[1]
+        if w > 1280: self.internal_res = (1280, 720)
+        else: self.internal_res = (w, h)
+        
+        # Initial display dimensions
+        if self.scale_factor == -1:
+            info = win32api.GetSystemMetrics(win32con.SM_CXSCREEN), win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+            self.display_dim = info
+        else:
+            self.display_dim = (int(w * self.scale_factor), int(h * self.scale_factor))
+
         print(f"Targeting: {self.target_window['title']} | Mode: {self.target_window['mode']} | FPS: {self.target_fps} | Scale: {scale_val}")
         print("Press F11 to stop, F10 to toggle FPS.")
         return True
@@ -201,12 +244,15 @@ class FrameGenerationApp:
         
         # Clear queues
         while not self.capture_queue.empty(): self.capture_queue.get()
+        while not self.process_queue.empty(): self.process_queue.get()
         while not self.display_queue.empty(): self.display_queue.get()
         
         t_cap = threading.Thread(target=self.capture_worker, daemon=True)
         t_proc = threading.Thread(target=self.processing_worker, daemon=True)
+        t_post = threading.Thread(target=self.post_processing_worker, daemon=True)
         t_cap.start()
         t_proc.start()
+        t_post.start()
         
         frame_interval = 1.0 / self.target_fps
         last_display_time = time.perf_counter()
@@ -244,41 +290,30 @@ class FrameGenerationApp:
                     frame = self.display_queue.get()
                     last_display_time = now
                     
-                    # Window sync (position/size)
+                    # Window sync (minimal overhead)
                     try:
                         t_rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
-                        t_cap_w, t_cap_h = t_rect[2] - t_rect[0], t_rect[3] - t_rect[1]
-                        if self.scale_factor == -1: t_w, t_h = screen.get_size()
-                        else: t_w, t_h = int(t_cap_w * self.scale_factor), int(t_cap_h * self.scale_factor)
-                        
                         if self.last_rect != t_rect:
+                            t_w, t_h = t_rect[2] - t_rect[0], t_rect[3] - t_rect[1]
                             if self.scale_factor != -1:
-                                if screen.get_width() != t_w or screen.get_height() != t_h:
-                                    screen = pygame.display.set_mode((t_w, t_h), pygame.NOFRAME)
+                                d_w, d_h = int(t_w * self.scale_factor), int(t_h * self.scale_factor)
+                                self.display_dim = (d_w, d_h)
+                                if screen.get_width() != d_w or screen.get_height() != d_h:
+                                    screen = pygame.display.set_mode((d_w, d_h), pygame.NOFRAME)
                                     hwnd_p = pygame.display.get_wm_info()["window"]
-                                    try:
-                                        ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_p, 0x00000011)
-                                        ex = win32gui.GetWindowLong(hwnd_p, win32con.GWL_EXSTYLE)
-                                        win32gui.SetWindowLong(hwnd_p, win32con.GWL_EXSTYLE, ex | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
-                                    except: pass
-                                win32gui.SetWindowPos(hwnd_p, win32con.HWND_TOPMOST, t_rect[0], t_rect[1], t_w, t_h, win32con.SWP_NOACTIVATE)
+                                    ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_p, 0x00000011)
+                                    ex = win32gui.GetWindowLong(hwnd_p, win32con.GWL_EXSTYLE)
+                                    win32gui.SetWindowLong(hwnd_p, win32con.GWL_EXSTYLE, ex | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
+                                win32gui.SetWindowPos(hwnd_p, win32con.HWND_TOPMOST, t_rect[0], t_rect[1], d_w, d_h, win32con.SWP_NOACTIVATE)
                             self.last_rect = t_rect
-                        else:
-                            win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, 0, 0, 0, 0, 
-                                                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
                     except: pass
 
-                    # Processing
-                    if self.scale_factor != 1.0 or self.scale_factor == -1:
-                        frame = cv2.resize(frame, (t_w, t_h), interpolation=self.upscale_algo)
-                    if self.sharpness > 0:
-                        blurred = cv2.GaussianBlur(frame, (0, 0), 3)
-                        frame = cv2.addWeighted(frame, 1.0 + self.sharpness, blurred, -self.sharpness, 0)
-
-                    surface = pygame.image.frombuffer(frame.tobytes(), (t_w, t_h), 'RGB')
+                    # Blit and Flip (Now ultra-fast as frame is pre-processed)
+                    surface = pygame.image.frombuffer(frame.tobytes(), self.display_dim, 'RGB')
                     screen.blit(surface, (0, 0))
                     
-                    if win32api.GetAsyncKeyState(0x79) & 0x8000:
+                    # Hotkeys & Stats
+                    if win32api.GetAsyncKeyState(0x79) & 0x8000: # F10
                         if time.time() - self.hotkey_cooldown > 0.3:
                             self.show_fps = not self.show_fps
                             self.hotkey_cooldown = time.time()
@@ -297,8 +332,7 @@ class FrameGenerationApp:
                         self.current_fps = 30 / (t_now - self.start_time)
                         self.start_time = t_now
                 else:
-                    # Queue empty, wait a tiny bit to avoid busy loop stutter
-                    time.sleep(0.001)
+                    time.sleep(0.0005)
 
             # Removed clock.tick to rely on perf_counter pacing
         finally:

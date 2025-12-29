@@ -29,7 +29,7 @@ class GameSelectorUI:
         mode_frame = tk.Frame(self.root, pady=5)
         mode_frame.pack()
         tk.Label(mode_frame, text="Capture Mode: ").grid(row=0, column=0)
-        self.mode_var = tk.StringVar(value="dxcam")
+        self.mode_var = tk.StringVar(value="bitblt")
         self.mode_combo = ttk.Combobox(mode_frame, textvariable=self.mode_var, values=["dxcam", "bitblt"], state="readonly", width=10)
         self.mode_combo.grid(row=0, column=1)
 
@@ -53,7 +53,7 @@ class GameSelectorUI:
         algo_frame = tk.Frame(self.root, pady=5)
         algo_frame.pack()
         tk.Label(algo_frame, text="Algorithm: ").grid(row=0, column=0)
-        self.algo_var = tk.StringVar(value="Bicubic")
+        self.algo_var = tk.StringVar(value="Lanczos")
         self.algo_combo = ttk.Combobox(algo_frame, textvariable=self.algo_var, values=["Bilinear", "Bicubic", "Lanczos"], state="readonly", width=12)
         self.algo_combo.grid(row=0, column=1)
 
@@ -61,7 +61,7 @@ class GameSelectorUI:
         sharp_frame = tk.Frame(self.root, pady=5)
         sharp_frame.pack()
         tk.Label(sharp_frame, text="Sharpening (Nitidez): ").grid(row=0, column=0)
-        self.sharp_var = tk.IntVar(value=30)
+        self.sharp_var = tk.IntVar(value=20)
         self.sharp_scale = tk.Scale(sharp_frame, from_=0, to=100, orient=tk.HORIZONTAL, variable=self.sharp_var, length=200)
         self.sharp_scale.grid(row=0, column=1)
 
