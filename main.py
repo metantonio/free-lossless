@@ -122,7 +122,12 @@ class FrameGenerationApp:
         except Exception as e:
             print(f"Capture exclusion not available: {e}")
 
-        # 2. Set to Always On Top
+        # 2. Make Click-Through
+        # WS_EX_TRANSPARENT + WS_EX_LAYERED allows mouse clicks to pass through
+        ex_style = win32gui.GetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE)
+        win32gui.SetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE, ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
+
+        # 3. Set to Always On Top
         win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, rect[0], rect[1], w, h, win32con.SWP_SHOWWINDOW)
         self.last_rect = rect
 
@@ -153,8 +158,16 @@ class FrameGenerationApp:
                         if self.last_rect != t_rect:
                             if (screen.get_width() != t_w or screen.get_height() != t_h):
                                 screen = pygame.display.set_mode((t_w, t_h), pygame.NOFRAME)
-                                # Re-apply affinity if recreated
-                                ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_pygame, 0x00000011)
+                                # Refresh handle if recreated
+                                hwnd_pygame = pygame.display.get_wm_info()["window"]
+                                
+                                # Re-apply all styles
+                                try:
+                                    ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_pygame, 0x00000011)
+                                    ex_style = win32gui.GetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE)
+                                    win32gui.SetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE, ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
+                                except:
+                                    pass
                             
                             win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, t_rect[0], t_rect[1], t_w, t_h, win32con.SWP_NOACTIVATE)
                             self.last_rect = t_rect
