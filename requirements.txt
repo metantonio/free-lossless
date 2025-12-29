@@ -4,3 +4,5 @@ torchvision
 opencv-python
 numpy
 pygame
+psutil
+pywin32

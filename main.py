@@ -6,6 +6,8 @@ import time
 from queue import Queue
 from capture import ScreenCapture
 from engine import RIFEEngine
+from ui import GameSelectorUI
+from selector import WindowSelector
 
 class FrameGenerationApp:
     def __init__(self, target_fps=60):
@@ -13,6 +15,7 @@ class FrameGenerationApp:
         self.capture = ScreenCapture()
         self.engine = RIFEEngine()
         self.running = False
+        self.target_window = None
         
         # Queues for pipeline
         self.capture_queue = Queue(maxsize=3)
@@ -26,12 +29,22 @@ class FrameGenerationApp:
     def capture_worker(self):
         print("Capture worker started")
         while self.running:
+            # Update region based on window position
+            if self.target_window:
+                try:
+                    rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
+                    self.capture.region = rect # Update region
+                except:
+                    print("Lost window, stopping...")
+                    self.running = False
+                    break
+            
             frame = self.capture.capture_frame()
             if frame is not None:
                 if self.capture_queue.full():
                     self.capture_queue.get()
                 self.capture_queue.put(frame)
-            time.sleep(1/self.target_fps) # Capture at half or full rate? Let's say half of target
+            time.sleep(1/(self.target_fps)) 
 
     def processing_worker(self):
         print("Processing worker started")
@@ -41,10 +54,8 @@ class FrameGenerationApp:
                 current_frame = self.capture_queue.get()
                 
                 if last_frame is not None:
-                    # Generate intermediate frame
                     inter_frame = self.engine.interpolate(last_frame, current_frame)
                     
-                    # Push Frame I and Frame B
                     if self.display_queue.full():
                         self.display_queue.get()
                     self.display_queue.put(inter_frame)
@@ -59,24 +70,40 @@ class FrameGenerationApp:
             else:
                 time.sleep(0.001)
 
+    def select_game(self):
+        ui = GameSelectorUI()
+        self.target_window = ui.get_selection()
+        if not self.target_window:
+            return False
+        
+        # Initial region
+        rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
+        self.capture.region = rect
+        print(f"Targeting: {self.target_window['title']} at {rect}")
+        return True
+
     def run(self):
-        pygame.init()
-        # Create a window same size as screen (or region)
-        # For prototype, let's just use 1280x720 or detect capture size
-        test_frame = self.capture.capture_frame()
-        if test_frame is None:
-            print("Failed to capture initial frame. Ensure screen is active.")
+        if not self.select_game():
+            print("No game selected. Exiting.")
             return
-            
-        h, w, c = test_frame.shape
-        screen = pygame.display.set_mode((w, h))
-        pygame.display.set_caption("Lossless Frame Gen Proto")
+
+        pygame.init()
+        # Initial size from window
+        rect = self.capture.region
+        w, h = rect[2] - rect[0], rect[3] - rect[1]
+        
+        # Ensure dimensions are valid
+        if w <= 0 or h <= 0:
+            print("Invalid window dimensions.")
+            return
+
+        screen = pygame.display.set_mode((w, h), pygame.RESIZABLE)
+        pygame.display.set_caption(f"FG: {self.target_window['title']}")
         clock = pygame.time.Clock()
         
         self.running = True
         self.start_time = time.time()
         
-        # Start threads
         t_cap = threading.Thread(target=self.capture_worker, daemon=True)
         t_proc = threading.Thread(target=self.processing_worker, daemon=True)
         t_cap.start()
@@ -91,9 +118,11 @@ class FrameGenerationApp:
                 if not self.display_queue.empty():
                     frame = self.display_queue.get()
                     
-                    # Convert RGB to BGR for pygame (or handle it)
-                    # Pygame expects RGB usually, so we might be fine if capture is RGB
-                    # Actually Pygame surface uses (Width, Height) and capture is (Height, Width)
+                    # Handle window resizing
+                    c_h, c_w, _ = frame.shape
+                    if (screen.get_width() != c_w or screen.get_height() != c_h):
+                        screen = pygame.display.set_mode((c_w, c_h), pygame.RESIZABLE)
+
                     surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
                     screen.blit(surface, (0, 0))
                     pygame.display.flip()
@@ -102,9 +131,9 @@ class FrameGenerationApp:
                     if self.frame_count % 60 == 0:
                         elapsed = time.time() - self.start_time
                         self.current_fps = self.frame_count / elapsed
-                        pygame.display.set_caption(f"Lossless Frame Gen Proto - FPS: {self.current_fps:.2f}")
+                        pygame.display.set_caption(f"FG: {self.target_window['title']} - FPS: {self.current_fps:.2f}")
                 
-                clock.tick(self.target_fps)
+                clock.tick(self.target_fps * 1.5) # Allow display to be slightly faster than intake
         finally:
             self.running = False
             self.capture.stop_capture()
