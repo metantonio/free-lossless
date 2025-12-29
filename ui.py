@@ -41,6 +41,22 @@ class GameSelectorUI:
         self.fps_scale = tk.Scale(fps_frame, from_=30, to=120, orient=tk.HORIZONTAL, variable=self.fps_var, resolution=1, length=200)
         self.fps_scale.grid(row=0, column=1)
 
+        # Scaling Selection
+        scale_frame = tk.Frame(self.root, pady=5)
+        scale_frame.pack()
+        tk.Label(scale_frame, text="Upscale: ").grid(row=0, column=0)
+        self.scale_var = tk.StringVar(value="1.0")
+        self.scale_combo = ttk.Combobox(scale_frame, textvariable=self.scale_var, values=["1.0", "1.25", "1.5", "2.0", "Fullscreen"], state="readonly", width=12)
+        self.scale_combo.grid(row=0, column=1)
+
+        # Algorithm Selection
+        algo_frame = tk.Frame(self.root, pady=5)
+        algo_frame.pack()
+        tk.Label(algo_frame, text="Algorithm: ").grid(row=0, column=0)
+        self.algo_var = tk.StringVar(value="Bicubic")
+        self.algo_combo = ttk.Combobox(algo_frame, textvariable=self.algo_var, values=["Bilinear", "Bicubic", "Lanczos"], state="readonly", width=12)
+        self.algo_combo.grid(row=0, column=1)
+
         # Buttons
         btn_frame = tk.Frame(self.root, pady=10)
         btn_frame.pack()
@@ -69,7 +85,9 @@ class GameSelectorUI:
                 "hwnd": hwnd, 
                 "title": title,
                 "mode": self.mode_var.get(),
-                "fps": self.fps_var.get()
+                "fps": self.fps_var.get(),
+                "scale": self.scale_var.get(),
+                "algo": self.algo_var.get()
             }
             self.root.destroy()
 

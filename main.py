@@ -34,6 +34,8 @@ class FrameGenerationApp:
         self.last_rect = None
         self.show_fps = True
         self.hotkey_cooldown = 0
+        self.scale_factor = 1.0
+        self.upscale_algo = cv2.INTER_LINEAR
 
     def capture_worker(self):
         print("Capture worker started")
@@ -91,11 +93,23 @@ class FrameGenerationApp:
         self.capture = ScreenCapture(mode=self.target_window["mode"])
         self.target_fps = self.target_window["fps"]
         
+        # Scaling config
+        scale_val = self.target_window["scale"]
+        if scale_val == "Fullscreen":
+            self.scale_factor = -1 # Special flag for fullscreen
+        else:
+            self.scale_factor = float(scale_val)
+            
+        algo_val = self.target_window["algo"]
+        if algo_val == "Bilinear": self.upscale_algo = cv2.INTER_LINEAR
+        elif algo_val == "Bicubic": self.upscale_algo = cv2.INTER_CUBIC
+        elif algo_val == "Lanczos": self.upscale_algo = cv2.INTER_LANCZOS4
+
         # Initial region
         rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
         self.capture.region = rect
-        print(f"Targeting: {self.target_window['title']} using {self.target_window['mode']} at {self.target_fps} FPS")
-        print("Press F11 to stop generation and return to menu.")
+        print(f"Targeting: {self.target_window['title']} | Mode: {self.target_window['mode']} | FPS: {self.target_fps} | Scale: {scale_val}")
+        print("Press F11 to stop, F10 to toggle FPS.")
         return True
 
     def run(self):
@@ -103,16 +117,25 @@ class FrameGenerationApp:
             return False
 
         pygame.init()
-        # Initial size
+        # Initial capture size
         rect = self.capture.region
         w, h = rect[2] - rect[0], rect[3] - rect[1]
         
-        if w <= 0 or h <= 0:
+        # Calculate display size
+        if self.scale_factor == -1: # Fullscreen
+            info = pygame.display.Info()
+            d_w, d_h = info.current_w, info.current_h
+            display_flags = pygame.NOFRAME | pygame.FULLSCREEN
+        else:
+            d_w, d_h = int(w * self.scale_factor), int(h * self.scale_factor)
+            display_flags = pygame.NOFRAME
+
+        if d_w <= 0 or d_h <= 0:
             print("Invalid window dimensions.")
             return True
 
         # Setup Borderless Window
-        screen = pygame.display.set_mode((w, h), pygame.NOFRAME)
+        screen = pygame.display.set_mode((d_w, d_h), display_flags)
         pygame.display.set_caption("FG Overlay")
         
         # FPS Font
@@ -133,7 +156,10 @@ class FrameGenerationApp:
         win32gui.SetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE, ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
 
         # 3. Set to Always On Top
-        win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, rect[0], rect[1], w, h, win32con.SWP_SHOWWINDOW)
+        if self.scale_factor == -1: # Fullscreen
+            win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, 0, 0, d_w, d_h, win32con.SWP_SHOWWINDOW)
+        else:
+            win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, rect[0], rect[1], d_w, d_h, win32con.SWP_SHOWWINDOW)
         self.last_rect = rect
 
         clock = pygame.time.Clock()
@@ -165,14 +191,21 @@ class FrameGenerationApp:
                 if not self.display_queue.empty():
                     frame = self.display_queue.get()
                     
-                    # Sync with target window position/size
+                    # Handle window resizing and position sync
+                    c_h, c_w, _ = frame.shape
+                    
                     try:
                         t_rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
-                        t_w, t_h = t_rect[2] - t_rect[0], t_rect[3] - t_rect[1]
+                        t_cap_w, t_cap_h = t_rect[2] - t_rect[0], t_rect[3] - t_rect[1]
                         
-                        # Only update window pos if target moved to avoid jitter/latency
+                        # Target display size
+                        if self.scale_factor == -1: # Fullscreen
+                            t_w, t_h = screen.get_size()
+                        else:
+                            t_w, t_h = int(t_cap_w * self.scale_factor), int(t_cap_h * self.scale_factor)
+                        
                         if self.last_rect != t_rect:
-                            if (screen.get_width() != t_w or screen.get_height() != t_h):
+                            if (screen.get_width() != t_w or screen.get_height() != t_h) and self.scale_factor != -1:
                                 screen = pygame.display.set_mode((t_w, t_h), pygame.NOFRAME)
                                 hwnd_pygame = pygame.display.get_wm_info()["window"]
                                 # Re-apply styles
@@ -182,14 +215,18 @@ class FrameGenerationApp:
                                     win32gui.SetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE, ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
                                 except: pass
                             
-                            win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, t_rect[0], t_rect[1], t_w, t_h, win32con.SWP_NOACTIVATE)
+                            if self.scale_factor != -1: # Only move if NOT in fullscreen
+                                win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, t_rect[0], t_rect[1], t_w, t_h, win32con.SWP_NOACTIVATE)
                             self.last_rect = t_rect
                         else:
                             # Re-assert TopMost
                             win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, 0, 0, 0, 0, 
                                                 win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
-                    except:
-                        pass
+                    except: pass
+
+                    # Apply Scaling
+                    if self.scale_factor != 1.0 or self.scale_factor == -1:
+                        frame = cv2.resize(frame, (t_w, t_h), interpolation=self.upscale_algo)
 
                     surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
                     screen.blit(surface, (0, 0))
