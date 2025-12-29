@@ -37,56 +37,77 @@ class RIFEEngine:
 
     def interpolate(self, frame1, frame2):
         """
-        Interpolate between frame1 and frame2 using optical flow.
+        Interpolate between frame1 and frame2 using stabilized bilateral warping.
         """
         if frame1.shape != frame2.shape:
-            # Safety check: Avoid crash if window resized between captures
             return frame2
 
         h, w = frame1.shape[:2]
         
-        # 1. Quick static check to save CPU
-        # Sample a small region to see if anything moved
+        # 1. Quick static check
         if np.array_equal(frame1[::100, ::100], frame2[::100, ::100]):
             return frame1
 
-        # 2. Convert to grayscale (reuse buffer if possible)
+        # 2. Prepare Grayscale
         gray1 = cv2.cvtColor(frame1, cv2.COLOR_RGB2GRAY)
         gray2 = cv2.cvtColor(frame2, cv2.COLOR_RGB2GRAY)
         
-        # 3. Calculate flow at even lower resolution (Quarter Res)
+        # 3. Low-res flow calculation
         scale = 0.25
         small1 = cv2.resize(gray1, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         small2 = cv2.resize(gray2, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         
         flow = self.dis.calc(small1, small2, None)
         
-        # 4. Scale and resize flow back - INTER_NEAREST is faster and fine for flow maps
+        # 4. Stabilize Flow (Median filter to remove 'jelly' noise)
+        flow = cv2.medianBlur(flow, 3)
+        
+        # 5. Scale and resize flow
         flow = flow * (1.0 / scale)
-        flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_NEAREST)
+        flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR)
         
-        # Warp frames (mid-way)
-        mid_flow = flow * 0.5
-        
-        # Cache meshgrid to avoid reallocation
+        # 6. Bilateral Warping Logic
+        # Instead of 1.0 warp, we do 0.5 for both directions
         if h != self.last_h or w != self.last_w:
             self.map_x, self.map_y = np.meshgrid(np.arange(w), np.arange(h))
             self.map_x = self.map_x.astype(np.float32)
             self.map_y = self.map_y.astype(np.float32)
             self.last_h, self.last_w = h, w
         
-        # Shift maps by mid_flow
-        # Text protection: skip warp for very small movements
-        motion_mag_sq = mid_flow[..., 0]**2 + mid_flow[..., 1]**2
-        mid_flow[motion_mag_sq < 0.25] = 0 # 0.5 pixel threshold squared
+        # Motion magnitude for adaptive blending
+        mag = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2)
         
-        m_x = self.map_x + mid_flow[..., 0]
-        m_y = self.map_y + mid_flow[..., 1]
+        # Forward warp map (frame1 -> mid)
+        m1_x = self.map_x + flow[..., 0] * 0.5
+        m1_y = self.map_y + flow[..., 1] * 0.5
         
-        # Remap - Linear is necessary for visual quality
-        inter_frame = cv2.remap(frame1, m_x, m_y, cv2.INTER_LINEAR)
+        # Backward warp map (frame2 -> mid)
+        m2_x = self.map_x - flow[..., 0] * 0.5
+        m2_y = self.map_y - flow[..., 1] * 0.5
         
-        return inter_frame
+        # Warp both
+        inter1 = cv2.remap(frame1, m1_x, m1_y, cv2.INTER_LINEAR)
+        inter2 = cv2.remap(frame2, m2_x, m2_y, cv2.INTER_LINEAR)
+        
+        # Adaptive Blending: 
+        # In regions with extreme motion, favor cross-fade to hide artifacts
+        # In low motion, use high warp weight
+        blend_mask = np.clip(mag / 20.0, 0, 1) # Threshold 20px
+        
+        # Final combine
+        # We blend inter1 and inter2 (Bilateral)
+        # and then slightly blend with original cross-fade if motion is too high
+        combined = cv2.addWeighted(inter1, 0.5, inter2, 0.5, 0)
+        
+        if np.max(blend_mask) > 0.1:
+            cross_fade = cv2.addWeighted(frame1, 0.5, frame2, 0.5, 0)
+            # Use blend_mask to choose between motion-compensated and cross-fade
+            # (Simplified for CPU speed)
+            mask_3c = cv2.merge([blend_mask, blend_mask, blend_mask])
+            final = combined * (1.0 - mask_3c * 0.4) + cross_fade * (mask_3c * 0.4)
+            return final.astype(np.uint8)
+        
+        return combined
 
 if __name__ == "__main__":
     # Test engine
