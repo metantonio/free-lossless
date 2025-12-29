@@ -62,12 +62,29 @@ class RIFEEngine:
         # 4. Stabilize Flow (Median filter to remove 'jelly' noise)
         flow = cv2.medianBlur(flow, 3)
         
-        # 5. Scale and resize flow
+        # 5. UI & Text Shield (Protection Mask)
+        # a) Static Check: regions that don't change between frames
+        diff = cv2.absdiff(small1, small2)
+        static_mask = np.where(diff < 5, 1.0, 0.0).astype(np.float32)
+        
+        # b) Edge Check (Text detection): HUDs/Text have high internal contrast
+        edges = cv2.Laplacian(small1, cv2.CV_32F)
+        edge_mask = np.clip(np.abs(edges) / 15.0, 0, 1)
+        
+        # Combine: protect if it's static OR has text-like edge density
+        # We dampen the flow in these regions
+        protection_mask = np.maximum(static_mask, edge_mask)
+        protection_mask = cv2.GaussianBlur(protection_mask, (3, 3), 0)
+        
+        # Dampen flow: 0 flow in protected areas
+        flow[..., 0] *= (1.0 - protection_mask)
+        flow[..., 1] *= (1.0 - protection_mask)
+
+        # 6. Scale and resize flow
         flow = flow * (1.0 / scale)
         flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR)
         
-        # 6. Bilateral Warping Logic
-        # Instead of 1.0 warp, we do 0.5 for both directions
+        # 7. Bilateral Warping Logic
         if h != self.last_h or w != self.last_w:
             self.map_x, self.map_y = np.meshgrid(np.arange(w), np.arange(h))
             self.map_x = self.map_x.astype(np.float32)
@@ -89,22 +106,16 @@ class RIFEEngine:
         inter1 = cv2.remap(frame1, m1_x, m1_y, cv2.INTER_LINEAR)
         inter2 = cv2.remap(frame2, m2_x, m2_y, cv2.INTER_LINEAR)
         
-        # Adaptive Blending: 
-        # In regions with extreme motion, favor cross-fade to hide artifacts
-        # In low motion, use high warp weight
+        # Adaptive Blending: favor cross-fade in extreme motion
         blend_mask = np.clip(mag / 20.0, 0, 1) # Threshold 20px
         
-        # Final combine
-        # We blend inter1 and inter2 (Bilateral)
-        # and then slightly blend with original cross-fade if motion is too high
         combined = cv2.addWeighted(inter1, 0.5, inter2, 0.5, 0)
         
         if np.max(blend_mask) > 0.1:
             cross_fade = cv2.addWeighted(frame1, 0.5, frame2, 0.5, 0)
-            # Use blend_mask to choose between motion-compensated and cross-fade
-            # (Simplified for CPU speed)
             mask_3c = cv2.merge([blend_mask, blend_mask, blend_mask])
-            final = combined * (1.0 - mask_3c * 0.4) + cross_fade * (mask_3c * 0.4)
+            # Use slightly less aggressive blending to preserve some motion detail
+            final = combined * (1.0 - mask_3c * 0.3) + cross_fade * (mask_3c * 0.3)
             return final.astype(np.uint8)
         
         return combined
