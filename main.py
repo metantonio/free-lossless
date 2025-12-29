@@ -187,6 +187,13 @@ class FrameGenerationApp:
             win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, rect[0], rect[1], d_w, d_h, win32con.SWP_SHOWWINDOW)
         self.last_rect = rect
 
+        # Increase process priority for better smoothness
+        try:
+            import psutil
+            p = psutil.Process()
+            p.nice(psutil.HIGH_PRIORITY_CLASS)
+        except: pass
+
         clock = pygame.time.Clock()
         self.running = True
         self.start_time = time.time()
@@ -200,6 +207,9 @@ class FrameGenerationApp:
         t_cap.start()
         t_proc.start()
         
+        frame_interval = 1.0 / self.target_fps
+        last_display_time = time.perf_counter()
+
         try:
             while self.running:
                 # 4. Check for Global Hotkey (F11)
@@ -213,38 +223,42 @@ class FrameGenerationApp:
                     if event.type == pygame.QUIT:
                         self.running = False
                 
+                # Precision Pacing Logic
+                now = time.perf_counter()
+                if now - last_display_time < frame_interval:
+                    # Not yet time for next frame
+                    time.sleep(0) # Yield
+                    continue
+
                 if not self.display_queue.empty():
                     frame = self.display_queue.get()
+                    last_display_time = now
                     
-                    # Handle window resizing and position sync
+                    # Window sync (position/size)
                     try:
                         t_rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
                         t_cap_w, t_cap_h = t_rect[2] - t_rect[0], t_rect[3] - t_rect[1]
-                        
-                        if self.scale_factor == -1:
-                            t_w, t_h = screen.get_size()
-                        else:
-                            t_w, t_h = int(t_cap_w * self.scale_factor), int(t_cap_h * self.scale_factor)
+                        if self.scale_factor == -1: t_w, t_h = screen.get_size()
+                        else: t_w, t_h = int(t_cap_w * self.scale_factor), int(t_cap_h * self.scale_factor)
                         
                         if self.last_rect != t_rect:
-                            if (screen.get_width() != t_w or screen.get_height() != t_h) and self.scale_factor != -1:
-                                screen = pygame.display.set_mode((t_w, t_h), pygame.NOFRAME)
-                                hwnd_pygame = pygame.display.get_wm_info()["window"]
-                                try:
-                                    ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_pygame, 0x00000011)
-                                    ex_style = win32gui.GetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE)
-                                    win32gui.SetWindowLong(hwnd_pygame, win32con.GWL_EXSTYLE, ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
-                                except: pass
-                            
                             if self.scale_factor != -1:
-                                win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, t_rect[0], t_rect[1], t_w, t_h, win32con.SWP_NOACTIVATE)
+                                if screen.get_width() != t_w or screen.get_height() != t_h:
+                                    screen = pygame.display.set_mode((t_w, t_h), pygame.NOFRAME)
+                                    hwnd_p = pygame.display.get_wm_info()["window"]
+                                    try:
+                                        ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_p, 0x00000011)
+                                        ex = win32gui.GetWindowLong(hwnd_p, win32con.GWL_EXSTYLE)
+                                        win32gui.SetWindowLong(hwnd_p, win32con.GWL_EXSTYLE, ex | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
+                                    except: pass
+                                win32gui.SetWindowPos(hwnd_p, win32con.HWND_TOPMOST, t_rect[0], t_rect[1], t_w, t_h, win32con.SWP_NOACTIVATE)
                             self.last_rect = t_rect
                         else:
                             win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, 0, 0, 0, 0, 
                                                 win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
                     except: pass
 
-                    # Scaling & Sharpening
+                    # Processing
                     if self.scale_factor != 1.0 or self.scale_factor == -1:
                         frame = cv2.resize(frame, (t_w, t_h), interpolation=self.upscale_algo)
                     if self.sharpness > 0:
@@ -254,7 +268,7 @@ class FrameGenerationApp:
                     surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
                     screen.blit(surface, (0, 0))
                     
-                    # Hotkey F10 for FPS
+                    # FPS & Overlay
                     if win32api.GetAsyncKeyState(0x79) & 0x8000:
                         if time.time() - self.hotkey_cooldown > 0.3:
                             self.show_fps = not self.show_fps
@@ -270,11 +284,14 @@ class FrameGenerationApp:
                     
                     self.frame_count += 1
                     if self.frame_count % 30 == 0:
-                        end_time = time.time()
-                        self.current_fps = 30 / (end_time - self.start_time)
-                        self.start_time = end_time
-            
-                clock.tick(self.target_fps) 
+                        t_now = time.time()
+                        self.current_fps = 30 / (t_now - self.start_time)
+                        self.start_time = t_now
+                else:
+                    # Queue empty, wait a tiny bit to avoid busy loop stutter
+                    time.sleep(0.001)
+
+            # Removed clock.tick to rely on perf_counter pacing
         finally:
             self.running = False
             self.capture.stop_capture()
