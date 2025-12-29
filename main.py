@@ -3,11 +3,14 @@ import numpy as np
 import pygame
 import threading
 import time
+import ctypes
 from queue import Queue
 from capture import ScreenCapture
 from engine import RIFEEngine
 from ui import GameSelectorUI
 from selector import WindowSelector
+import win32gui
+import win32con
 
 class FrameGenerationApp:
     def __init__(self, target_fps=60):
@@ -25,6 +28,9 @@ class FrameGenerationApp:
         self.frame_count = 0
         self.start_time = 0
         self.current_fps = 0
+        
+        # Window management
+        self.last_rect = None
 
     def capture_worker(self):
         print("Capture worker started")
@@ -44,6 +50,8 @@ class FrameGenerationApp:
                 if self.capture_queue.full():
                     self.capture_queue.get()
                 self.capture_queue.put(frame)
+            
+            # FPS control for capture
             time.sleep(1/(self.target_fps)) 
 
     def processing_worker(self):
@@ -83,7 +91,7 @@ class FrameGenerationApp:
         # Initial region
         rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
         self.capture.region = rect
-        print(f"Targeting: {self.target_window['title']} using {self.target_window['mode']} at {self.target_fps} FPS - {rect}")
+        print(f"Targeting: {self.target_window['title']} using {self.target_window['mode']} at {self.target_fps} FPS")
         return True
 
     def run(self):
@@ -92,19 +100,33 @@ class FrameGenerationApp:
             return
 
         pygame.init()
-        # Initial size from window
+        # Initial size
         rect = self.capture.region
         w, h = rect[2] - rect[0], rect[3] - rect[1]
         
-        # Ensure dimensions are valid
         if w <= 0 or h <= 0:
             print("Invalid window dimensions.")
             return
 
-        screen = pygame.display.set_mode((w, h), pygame.RESIZABLE)
-        pygame.display.set_caption(f"FG: {self.target_window['title']}")
-        clock = pygame.time.Clock()
+        # Setup Borderless Window
+        screen = pygame.display.set_mode((w, h), pygame.NOFRAME)
+        pygame.display.set_caption("FG Overlay")
         
+        hwnd_pygame = pygame.display.get_wm_info()["window"]
+        
+        # 1. Exclude this window from screen capture (Win 10+)
+        # This prevents the black feedback loop when capturing the same area
+        try:
+            WDA_EXCLUDEFROMCAPTURE = 0x00000011
+            ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_pygame, WDA_EXCLUDEFROMCAPTURE)
+        except Exception as e:
+            print(f"Capture exclusion not available: {e}")
+
+        # 2. Set to Always On Top
+        win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, rect[0], rect[1], w, h, win32con.SWP_SHOWWINDOW)
+        self.last_rect = rect
+
+        clock = pygame.time.Clock()
         self.running = True
         self.start_time = time.time()
         
@@ -122,10 +144,22 @@ class FrameGenerationApp:
                 if not self.display_queue.empty():
                     frame = self.display_queue.get()
                     
-                    # Handle window resizing
-                    c_h, c_w, _ = frame.shape
-                    if (screen.get_width() != c_w or screen.get_height() != c_h):
-                        screen = pygame.display.set_mode((c_w, c_h), pygame.RESIZABLE)
+                    # Sync with target window position/size
+                    try:
+                        t_rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
+                        t_w, t_h = t_rect[2] - t_rect[0], t_rect[3] - t_rect[1]
+                        
+                        # Only update window pos if target moved to avoid jitter/latency
+                        if self.last_rect != t_rect:
+                            if (screen.get_width() != t_w or screen.get_height() != t_h):
+                                screen = pygame.display.set_mode((t_w, t_h), pygame.NOFRAME)
+                                # Re-apply affinity if recreated
+                                ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_pygame, 0x00000011)
+                            
+                            win32gui.SetWindowPos(hwnd_pygame, win32con.HWND_TOPMOST, t_rect[0], t_rect[1], t_w, t_h, win32con.SWP_NOACTIVATE)
+                            self.last_rect = t_rect
+                    except:
+                        pass
 
                     surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
                     screen.blit(surface, (0, 0))
@@ -135,15 +169,12 @@ class FrameGenerationApp:
                     if self.frame_count % 60 == 0:
                         elapsed = time.time() - self.start_time
                         self.current_fps = self.frame_count / elapsed
-                        
-                        # Add queue sizes for debugging
                         cap_q = self.capture_queue.qsize()
                         dis_q = self.display_queue.qsize()
-                        
-                        pygame.display.set_caption(f"FG: {self.target_window['title']} - FPS: {self.current_fps:.2f} | Q: {cap_q}/{dis_q}")
                         print(f"Stats: FPS={self.current_fps:.2f}, CaptureQueue={cap_q}, DisplayQueue={dis_q}")
                 
-                clock.tick(self.target_fps * 1.5) # Allow display to be slightly faster than intake
+                # The display loop should be fast
+                clock.tick(self.target_fps * 2) 
         finally:
             self.running = False
             self.capture.stop_capture()
