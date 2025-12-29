@@ -275,10 +275,9 @@ class FrameGenerationApp:
                         blurred = cv2.GaussianBlur(frame, (0, 0), 3)
                         frame = cv2.addWeighted(frame, 1.0 + self.sharpness, blurred, -self.sharpness, 0)
 
-                    surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
+                    surface = pygame.image.frombuffer(frame.tobytes(), (t_w, t_h), 'RGB')
                     screen.blit(surface, (0, 0))
                     
-                    # FPS & Overlay
                     if win32api.GetAsyncKeyState(0x79) & 0x8000:
                         if time.time() - self.hotkey_cooldown > 0.3:
                             self.show_fps = not self.show_fps

@@ -25,20 +25,25 @@ class RIFEEngine:
         """
         h, w = frame1.shape[:2]
         
-        # Convert to grayscale 
+        # 1. Quick static check to save CPU
+        # Sample a small region to see if anything moved
+        if np.array_equal(frame1[::100, ::100], frame2[::100, ::100]):
+            return frame1
+
+        # 2. Convert to grayscale (reuse buffer if possible)
         gray1 = cv2.cvtColor(frame1, cv2.COLOR_RGB2GRAY)
         gray2 = cv2.cvtColor(frame2, cv2.COLOR_RGB2GRAY)
         
-        # Calculate flow at lower resolution
-        scale = 0.5
-        small1 = cv2.resize(gray1, (0, 0), fx=scale, fy=scale)
-        small2 = cv2.resize(gray2, (0, 0), fx=scale, fy=scale)
+        # 3. Calculate flow at even lower resolution (Quarter Res)
+        scale = 0.25
+        small1 = cv2.resize(gray1, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        small2 = cv2.resize(gray2, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         
         flow = self.dis.calc(small1, small2, None)
         
-        # Scale and resize flow back
+        # 4. Scale and resize flow back - INTER_NEAREST is faster and fine for flow maps
         flow = flow * (1.0 / scale)
-        flow = cv2.resize(flow, (w, h))
+        flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_NEAREST)
         
         # Warp frames (mid-way)
         mid_flow = flow * 0.5
@@ -51,10 +56,14 @@ class RIFEEngine:
             self.last_h, self.last_w = h, w
         
         # Shift maps by mid_flow
+        # Text protection: skip warp for very small movements
+        motion_mag_sq = mid_flow[..., 0]**2 + mid_flow[..., 1]**2
+        mid_flow[motion_mag_sq < 0.25] = 0 # 0.5 pixel threshold squared
+        
         m_x = self.map_x + mid_flow[..., 0]
         m_y = self.map_y + mid_flow[..., 1]
         
-        # Remap
+        # Remap - Linear is necessary for visual quality
         inter_frame = cv2.remap(frame1, m_x, m_y, cv2.INTER_LINEAR)
         
         return inter_frame
