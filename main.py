@@ -309,6 +309,12 @@ class FrameGenerationApp:
                         t_rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
                         if self.last_rect != t_rect:
                             t_w, t_h = t_rect[2] - t_rect[0], t_rect[3] - t_rect[1]
+                            
+                            # Update internal res cap immediately
+                            max_w, max_h = (1280, 720) if self.target_window.get("performance_mode") else (800, 600)
+                            if t_w > max_w: self.internal_res = (max_w, max_h)
+                            else: self.internal_res = (t_w, t_h)
+
                             if self.scale_factor != -1:
                                 d_w, d_h = int(t_w * self.scale_factor), int(t_h * self.scale_factor)
                                 self.display_dim = (d_w, d_h)

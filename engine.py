@@ -39,6 +39,10 @@ class RIFEEngine:
         """
         Interpolate between frame1 and frame2 using optical flow.
         """
+        if frame1.shape != frame2.shape:
+            # Safety check: Avoid crash if window resized between captures
+            return frame2
+
         h, w = frame1.shape[:2]
         
         # 1. Quick static check to save CPU
