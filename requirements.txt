@@ -1,0 +1,6 @@
+dxcam
+torch
+torchvision
+opencv-python
+numpy
+pygame
