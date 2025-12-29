@@ -16,8 +16,24 @@ class RIFEEngine:
         self.last_w = 0
         self.map_x = None
         self.map_y = None
+        self.high_precision = False
         
         print("Optimized Optical Flow Engine (DIS ULTRAFAST) initialized.")
+
+    def set_high_precision(self, enabled):
+        self.high_precision = enabled
+        if enabled:
+            # Ultra Smooth Mode: Higher precision, way more CPU usage
+            self.dis.setFinestScale(0) # 0 is finer than 1
+            self.dis.setGradientDescentIterations(25)
+            self.dis.setVariationalRefinementIterations(5)
+            print("Engine set to ULTRA SMOOTH (High Precision)")
+        else:
+            # Standard Mode: Fast and efficient
+            self.dis.setFinestScale(1)
+            self.dis.setGradientDescentIterations(10)
+            self.dis.setVariationalRefinementIterations(0)
+            print("Engine set to STANDARD Precision")
 
     def interpolate(self, frame1, frame2):
         """

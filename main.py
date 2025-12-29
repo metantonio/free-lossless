@@ -169,14 +169,19 @@ class FrameGenerationApp:
         self.fg_enabled = self.target_window.get("fg_enabled", True)
         
         self.sharpness = self.target_window["sharpness"] / 100.0 * 2.0 # Scale 0-100 to 0.0-2.0
+        self.ultra_smooth = self.target_window.get("ultra_smooth", False)
+        self.engine.set_high_precision(self.ultra_smooth)
 
         # Initial region
         rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
         self.capture.region = rect
         
-        # Performance tuning: Set internal resolution limit (800x600 for max speed)
+        # Performance tuning: Set internal resolution limit
+        # Performance Mode (Alta Res) uses 1280x720, Standard uses 800x600
+        max_w, max_h = (1280, 720) if self.target_window.get("performance_mode") else (800, 600)
+        
         w, h = rect[2] - rect[0], rect[3] - rect[1]
-        if w > 800: self.internal_res = (800, 600)
+        if w > max_w: self.internal_res = (max_w, max_h)
         else: self.internal_res = (w, h)
         
         # Initial display dimensions
@@ -335,16 +340,22 @@ class FrameGenerationApp:
                     
                     if self.show_fps:
                         status_color = (0, 255, 0)
-                        fps_text = font.render(f"FPS: {self.current_fps:.1f}", True, status_color)
-                        fsr_text = font.render(f"FSR: {'ON' if self.fsr_mode else 'OFF'}", True, (255, 200, 0) if self.fsr_mode else (150, 150, 150))
+                        fps_text = font.render(f"(F11) FPS: {self.current_fps:.1f}", True, status_color)
+                        fsr_text = font.render(f"(F9) FSR: {'ON' if self.fsr_mode else 'OFF'}", True, (255, 200, 0) if self.fsr_mode else (150, 150, 150))
                         
+                        # Extra status for new modes
+                        mode_text_str = "STD"
+                        if self.ultra_smooth: mode_text_str = "SMOOTH"
+                        mode_text = font.render(f"Mode: {mode_text_str}", True, (0, 200, 255))
+
                         # Draw status box
-                        bg_rect = pygame.Rect(10, 10, 150, 60)
+                        bg_rect = pygame.Rect(10, 10, 180, 85)
                         pygame.draw.rect(screen, (0, 0, 0), bg_rect)
                         pygame.draw.rect(screen, (50, 50, 50), bg_rect, 2)
                         
                         screen.blit(fps_text, (20, 15))
                         screen.blit(fsr_text, (20, 40))
+                        screen.blit(mode_text, (20, 65))
 
                     pygame.display.flip()
                     

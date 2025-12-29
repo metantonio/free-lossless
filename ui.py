@@ -6,7 +6,7 @@ class GameSelectorUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Lossless Frame Gen - Select Game")
-        self.root.geometry("500x900")
+        self.root.geometry("500x960")
         
         self.selected_window = None
         self.selector = WindowSelector()
@@ -81,6 +81,18 @@ class GameSelectorUI:
         self.fg_check = tk.Checkbutton(fg_frame, text="Generación de Frames (Motor RIFE)", variable=self.fg_var)
         self.fg_check.pack()
 
+        # Advanced Toggles
+        adv_frame = tk.Frame(self.root, pady=5)
+        adv_frame.pack()
+        
+        self.ultra_smooth_var = tk.BooleanVar(value=False)
+        self.ultra_smooth_check = tk.Checkbutton(adv_frame, text="Ultra Smooth (Mejor Precisión)", variable=self.ultra_smooth_var)
+        self.ultra_smooth_check.grid(row=0, column=0, padx=5)
+        
+        self.perf_mode_var = tk.BooleanVar(value=False)
+        self.perf_mode_check = tk.Checkbutton(adv_frame, text="Modo Performance (Alta Res)", variable=self.perf_mode_var)
+        self.perf_mode_check.grid(row=0, column=1, padx=5)
+
         # Sharpening Selection
         sharp_frame = tk.Frame(self.root, pady=5)
         sharp_frame.pack()
@@ -121,7 +133,9 @@ class GameSelectorUI:
                 "scale": self.scale_var.get(),
                 "algo": self.algo_var.get(),
                 "sharpness": self.sharp_var.get(),
-                "fg_enabled": self.fg_var.get()
+                "fg_enabled": self.fg_var.get(),
+                "ultra_smooth": self.ultra_smooth_var.get(),
+                "performance_mode": self.perf_mode_var.get()
             }
             self.root.destroy()
 
