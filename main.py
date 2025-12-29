@@ -23,7 +23,7 @@ class FrameGenerationApp:
         
         # Queues for pipeline
         self.capture_queue = Queue(maxsize=3)
-        self.display_queue = Queue(maxsize=5)
+        self.display_queue = Queue(maxsize=10) # Increased for triple buffering & smoothness
         
         # Stats
         self.frame_count = 0
@@ -41,8 +41,10 @@ class FrameGenerationApp:
     def capture_worker(self):
         print("Capture worker started")
         last_frame = None
-        # Capture at half the target FPS because we interpolate 1 extra frame
+        # Target capture is exactly half the display FPS
         capture_interval = 1.0 / (self.target_fps / 2) if self.target_fps > 0 else 1.0/30.0
+        
+        last_capture_time = time.perf_counter()
         
         while self.running:
             # Update region based on window position
@@ -55,19 +57,22 @@ class FrameGenerationApp:
                     self.running = False
                     break
             
-            start_time = time.time()
+            now = time.perf_counter()
+            if now - last_capture_time < capture_interval:
+                time.sleep(0.001)
+                continue
+            
+            last_capture_time = now
             frame = self.capture.capture_frame()
             
             if frame is not None:
-                # Check for duplicates (quick check)
+                # Optimized duplicate check
                 is_duplicate = False
                 if last_frame is not None:
-                    # Sample some pixels for speed
                     try:
-                        if np.array_equal(frame[10:20, 10:20], last_frame[10:20, 10:20]):
-                            # If samples match, do a full check or just trust the sample
-                            # Full check is safer but slower. Let's do a slightly larger sample.
-                            if np.array_equal(frame[::50, ::50], last_frame[::50, ::50]):
+                        # Slice check is very fast
+                        if np.array_equal(frame[10:30:2, 10:30:2], last_frame[10:30:2, 10:30:2]):
+                            if np.array_equal(frame[::60, ::60], last_frame[::60, ::60]):
                                 is_duplicate = True
                     except: pass
                 
@@ -77,10 +82,6 @@ class FrameGenerationApp:
                         except: pass
                     self.capture_queue.put(frame)
                     last_frame = frame
-                
-            elapsed = time.time() - start_time
-            sleep_time = max(0, capture_interval - elapsed)
-            time.sleep(sleep_time)
 
     def processing_worker(self):
         print("Processing worker started")
@@ -226,8 +227,17 @@ class FrameGenerationApp:
                 # Precision Pacing Logic
                 now = time.perf_counter()
                 if now - last_display_time < frame_interval:
-                    # Not yet time for next frame
-                    time.sleep(0) # Yield
+                    # Busy-wait for the last 1ms for sub-ms precision
+                    if frame_interval - (now - last_display_time) < 0.001:
+                        pass # Busy wait
+                    else:
+                        time.sleep(0.0005)
+                    continue
+
+                # Buffer check: wait for at least 2 frames to be ready to absorb jitter
+                # but only if we are not already in a high-latency state
+                if self.display_queue.qsize() < 2 and self.frame_count > 0:
+                    time.sleep(0.001)
                     continue
 
                 if not self.display_queue.empty():

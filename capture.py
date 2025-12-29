@@ -22,6 +22,13 @@ class ScreenCapture:
         
         self.region = region
         self.is_capturing = False
+
+        # BitBlt persistent resources
+        self._hwnd_dc = None
+        self._mfc_dc = None
+        self._save_dc = None
+        self._save_bitmap = None
+        self._last_dims = (0, 0)
         
     def capture_frame(self):
         """
@@ -44,40 +51,80 @@ class ScreenCapture:
             
         return frame
 
+    def _init_bitblt_resources(self, width, height):
+        self._cleanup_gdi()
+        hwnd = win32gui.GetDesktopWindow()
+        self._hwnd_dc = win32gui.GetWindowDC(hwnd)
+        self._mfc_dc = win32ui.CreateDCFromHandle(self._hwnd_dc)
+        self._save_dc = self._mfc_dc.CreateCompatibleDC()
+        self._save_bitmap = win32ui.CreateBitmap()
+        self._save_bitmap.CreateCompatibleBitmap(self._mfc_dc, width, height)
+        self._save_dc.SelectObject(self._save_bitmap)
+        self._last_dims = (width, height)
+
+    def _cleanup_gdi(self):
+        # Deselect bitmap before deletion
+        if self._save_dc:
+            try:
+                # Selecting a small dummy bitmap or 0 can help deselect the current one
+                # but in win32ui it's often safer to just try/except the deletion
+                self._save_dc.DeleteDC()
+            except:
+                pass
+            self._save_dc = None
+            
+        if self._mfc_dc:
+            try:
+                self._mfc_dc.DeleteDC()
+            except:
+                pass
+            self._mfc_dc = None
+            
+        if self._hwnd_dc:
+            try:
+                hwnd = win32gui.GetDesktopWindow()
+                win32gui.ReleaseDC(hwnd, self._hwnd_dc)
+            except:
+                pass
+            self._hwnd_dc = None
+            
+        if self._save_bitmap:
+            try:
+                win32gui.DeleteObject(self._save_bitmap.GetHandle())
+            except:
+                pass
+            self._save_bitmap = None
+
     def _capture_bitblt(self):
         """
-        Captures using GDI BitBlt. Better for old games like Mu Online.
+        Captures using GDI BitBlt with persistent resources.
         """
-        if self.region is None:
-            width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-            height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
-            left, top = 0, 0
-        else:
-            left, top, right, bottom = self.region
-            width = right - left
-            height = bottom - top
+        try:
+            if self.region is None:
+                width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+                height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+                left, top = 0, 0
+            else:
+                left, top, right, bottom = self.region
+                width = right - left
+                height = bottom - top
 
-        hwnd = win32gui.GetDesktopWindow()
-        hwndDC = win32gui.GetWindowDC(hwnd)
-        mfcDC = win32ui.CreateDCFromHandle(hwndDC)
-        saveDC = mfcDC.CreateCompatibleDC()
+            if width <= 0 or height <= 0: return None
 
-        saveBitMap = win32ui.CreateBitmap()
-        saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
-        saveDC.SelectObject(saveBitMap)
+            # Re-init if dimensions changed or first time
+            if (width, height) != self._last_dims or self._save_dc is None:
+                self._init_bitblt_resources(width, height)
 
-        saveDC.BitBlt((0, 0), (width, height), mfcDC, (left, top), win32con.SRCCOPY)
-
-        signedIntsArray = saveBitMap.GetBitmapBits(True)
-        img = np.frombuffer(signedIntsArray, dtype='uint8')
-        img.shape = (height, width, 4)
-
-        win32gui.DeleteObject(saveBitMap.GetHandle())
-        saveDC.DeleteDC()
-        mfcDC.DeleteDC()
-        win32gui.ReleaseDC(hwnd, hwndDC)
-
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+            self._save_dc.BitBlt((0, 0), (width, height), self._mfc_dc, (left, top), win32con.SRCCOPY)
+            signedIntsArray = self._save_bitmap.GetBitmapBits(True)
+            img = np.frombuffer(signedIntsArray, dtype='uint8')
+            img.shape = (height, width, 4)
+            return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+        except Exception as e:
+            # If bitblt fails (e.g. window closed or DC invalid), cleanup and return None
+            # Don't print error to avoid spamming the console 120 times per second
+            self._cleanup_gdi()
+            return None
 
     def start_high_speed_capture(self, target_fps=60):
         """
@@ -94,11 +141,12 @@ class ScreenCapture:
         if self.is_capturing and self.camera is not None:
             self.camera.stop()
             self.is_capturing = False
+        self._cleanup_gdi()
 
 if __name__ == "__main__":
     # Test capture
-    cap = ScreenCapture()
-    print("Testing capture speed for 100 frames with DXCAM...")
+    cap = ScreenCapture(mode="bitblt")
+    print("Testing BitBlt speed for 100 frames with persistent GDI...")
     start_time = time.time()
     count = 0
     while count < 100:
@@ -112,5 +160,6 @@ if __name__ == "__main__":
     # Show one frame to verify
     frame = cap.capture_frame()
     if frame is not None:
-        cv2.imwrite("test_capture.jpg", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-        print("Test frame saved to test_capture.jpg")
+        cv2.imwrite("test_capture_bitblt.jpg", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        print("Test frame saved to test_capture_bitblt.jpg")
+    cap.stop_capture()
