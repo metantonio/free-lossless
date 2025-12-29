@@ -78,11 +78,12 @@ class FrameGenerationApp:
         
         # Re-initialize capture with correct mode
         self.capture = ScreenCapture(mode=self.target_window["mode"])
+        self.target_fps = self.target_window["fps"]
         
         # Initial region
         rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
         self.capture.region = rect
-        print(f"Targeting: {self.target_window['title']} using {self.target_window['mode']} at {rect}")
+        print(f"Targeting: {self.target_window['title']} using {self.target_window['mode']} at {self.target_fps} FPS - {rect}")
         return True
 
     def run(self):

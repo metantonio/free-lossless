@@ -26,13 +26,20 @@ class GameSelectorUI:
         self.tree.column("Process", width=150)
         self.tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        # Mode Selection
         mode_frame = tk.Frame(self.root, pady=5)
         mode_frame.pack()
         tk.Label(mode_frame, text="Capture Mode: ").grid(row=0, column=0)
         self.mode_var = tk.StringVar(value="dxcam")
         self.mode_combo = ttk.Combobox(mode_frame, textvariable=self.mode_var, values=["dxcam", "bitblt"], state="readonly", width=10)
         self.mode_combo.grid(row=0, column=1)
+
+        # FPS Selection
+        fps_frame = tk.Frame(self.root, pady=5)
+        fps_frame.pack()
+        tk.Label(fps_frame, text="Target FPS: ").grid(row=0, column=0)
+        self.fps_var = tk.IntVar(value=60)
+        self.fps_scale = tk.Scale(fps_frame, from_=30, to=120, orient=tk.HORIZONTAL, variable=self.fps_var, resolution=1, length=200)
+        self.fps_scale.grid(row=0, column=1)
 
         # Buttons
         btn_frame = tk.Frame(self.root, pady=10)
@@ -61,7 +68,8 @@ class GameSelectorUI:
             self.selected_window = {
                 "hwnd": hwnd, 
                 "title": title,
-                "mode": self.mode_var.get()
+                "mode": self.mode_var.get(),
+                "fps": self.fps_var.get()
             }
             self.root.destroy()
 
