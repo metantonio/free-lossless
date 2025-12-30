@@ -442,6 +442,7 @@ class FrameGenerationApp:
         return True
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     app = FrameGenerationApp(target_fps=60)
     while True:
         if not app.run():
