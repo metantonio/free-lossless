@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
 import time
+import os
+import requests
 
 class RIFEEngine:
     def __init__(self, model_version="rife-v4"):
@@ -130,15 +132,112 @@ class RIFEEngine:
         
         return combined
 
+
+class RIFEONNXEngine:
+    def __init__(self, model_path="models/rife_v4_lite.onnx"):
+        self.model_path = model_path
+        self.session = None
+        self.last_h = 0
+        self.last_w = 0
+        
+        # Download if missing
+        self._download_model_if_missing()
+        self._init_session()
+        
+    def _download_model_if_missing(self):
+        # Delete if corrupted (too small)
+        if os.path.exists(self.model_path) and os.path.getsize(self.model_path) < 1000:
+            print(f"Deleting corrupted model at {self.model_path}")
+            os.remove(self.model_path)
+
+        if not os.path.exists(self.model_path):
+            os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
+            print(f"Downloading RIFE AI model to {self.model_path}...")
+            # Using a more reliable HuggingFace source
+            url = "https://huggingface.co/tensorstack/RIFE/resolve/main/model.onnx?download=true"
+            try:
+                r = requests.get(url, allow_redirects=True, timeout=60, stream=True)
+                r.raise_for_status()
+                with open(self.model_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                print("RIFE Model downloaded successfully.")
+            except Exception as e:
+                print(f"Failed to download RIFE model: {e}")
+
+    def _init_session(self):
+        try:
+            import onnxruntime as ort
+            # We prefer DirectML for Windows GPUs, then CUDA, then CPU
+            providers = [
+                'DmlExecutionProvider', 
+                'CUDAExecutionProvider', 
+                'CPUExecutionProvider'
+            ]
+            self.session = ort.InferenceSession(self.model_path, providers=providers)
+            print(f"RIFE Inference session initialized with {self.session.get_providers()}")
+        except Exception as e:
+            print(f"Error initializing RIFE ONNX session: {e}")
+
+    def interpolate(self, frame1, frame2):
+        if self.session is None:
+            return frame2
+            
+        h, w = frame1.shape[:2]
+        
+        # RIFE usually requires multiples of 32 or 64. 
+        # We'll pad/resize if needed, or assume internal_res is already compatible.
+        # For simplicity, let's just resize to 512x512 for now or keep original if it works.
+        # Most lite models are trained on specific resolutions or are flexible.
+        
+        # Pre-process: RGB [0, 255] -> [0, 1] and (H, W, C) -> (1, C, H, W)
+        img1 = (frame1.astype(np.float32) / 255.0).transpose(2, 0, 1)[np.newaxis, ...]
+        img2 = (frame2.astype(np.float32) / 255.0).transpose(2, 0, 1)[np.newaxis, ...]
+        
+        # Prepare for RIFE (img0, img1, timestep)
+        # We need to map our inputs to what the model expects
+        input_dict = {
+            "img0": img1,
+            "img1": img2,
+            "timestep": np.array([0.5], dtype=np.float32)
+        }
+        
+        try:
+            # Run inference
+            output = self.session.run(None, input_dict)[0]
+            
+            # Post-process: (1, C, H, W) -> (H, W, C) [0, 255]
+            res = (np.clip(output[0].transpose(1, 2, 0), 0, 1) * 255).astype(np.uint8)
+            return res
+        except Exception as e:
+            # Fallback if names are slightly different or model varies
+            try:
+                # Dynamic mapping if names changed
+                inputs = [i.name for i in self.session.get_inputs()]
+                alt_dict = {
+                    inputs[0]: img1,
+                    inputs[1]: img2
+                }
+                if len(inputs) > 2:
+                    alt_dict[inputs[2]] = np.array([0.5], dtype=np.float32)
+                output = self.session.run(None, alt_dict)[0]
+                res = (np.clip(output[0].transpose(1, 2, 0), 0, 1) * 255).astype(np.uint8)
+                return res
+            except Exception as e2:
+                print(f"Interpolation error: {e2}")
+                return frame2
+
 if __name__ == "__main__":
     # Test engine
     engine = RIFEEngine()
+    # To test RIFE:
+    # engine = RIFEONNXEngine()
     f1 = np.zeros((720, 1280, 3), dtype=np.uint8)
     cv2.circle(f1, (100, 100), 50, (255, 0, 0), -1)
     f2 = np.zeros((720, 1280, 3), dtype=np.uint8)
     cv2.circle(f2, (200, 100), 50, (255, 0, 0), -1)
     
-    print("Testing Optical Flow interpolation...")
+    print("Testing interpolation...")
     start = time.time()
     result = engine.interpolate(f1, f2)
     end = time.time()

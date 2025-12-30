@@ -74,12 +74,17 @@ class GameSelectorUI:
         self.algo_combo.grid(row=0, column=1)
         self.algo_combo.bind("<<ComboboxSelected>>", self._on_algo_change)
 
-        # Frame Generation Toggle (RIFE)
+        # Frame Generation Toggle & Engine Selection
         fg_frame = tk.Frame(self.root, pady=5)
         fg_frame.pack()
+        
         self.fg_var = tk.BooleanVar(value=True)
-        self.fg_check = tk.Checkbutton(fg_frame, text="Generación de Frames (Motor RIFE)", variable=self.fg_var)
-        self.fg_check.pack()
+        self.fg_check = tk.Checkbutton(fg_frame, text="Generación de Frames", variable=self.fg_var)
+        self.fg_check.grid(row=0, column=0)
+        
+        self.engine_var = tk.StringVar(value="AI (RIFE ONNX)")
+        self.engine_combo = ttk.Combobox(fg_frame, textvariable=self.engine_var, values=["AI (RIFE ONNX)", "Fast (DIS Flow)"], state="readonly", width=15)
+        self.engine_combo.grid(row=0, column=1, padx=5)
 
         # Advanced Toggles
         adv_frame = tk.Frame(self.root, pady=5)
@@ -134,6 +139,7 @@ class GameSelectorUI:
                 "algo": self.algo_var.get(),
                 "sharpness": self.sharp_var.get(),
                 "fg_enabled": self.fg_var.get(),
+                "engine_type": self.engine_var.get(),
                 "ultra_smooth": self.ultra_smooth_var.get(),
                 "performance_mode": self.perf_mode_var.get()
             }

@@ -6,7 +6,7 @@ import time
 import ctypes
 from queue import Queue
 from capture import ScreenCapture
-from engine import RIFEEngine
+from engine import RIFEEngine, RIFEONNXEngine
 from ui import GameSelectorUI
 from selector import WindowSelector
 from filters import AMDFilters, NvidiaAIUpscaler
@@ -181,7 +181,12 @@ class FrameGenerationApp:
         
         self.sharpness = self.target_window["sharpness"] / 100.0 * 2.0 # Scale 0-100 to 0.0-2.0
         self.ultra_smooth = self.target_window.get("ultra_smooth", False)
-        self.engine.set_high_precision(self.ultra_smooth)
+        if self.target_window.get("engine_type") == "AI (RIFE ONNX)":
+            self.engine = RIFEONNXEngine()
+        else:
+            self.engine = RIFEEngine()
+            
+        self.engine.set_high_precision(self.ultra_smooth) if hasattr(self.engine, 'set_high_precision') else None
 
         # Initial region
         rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
