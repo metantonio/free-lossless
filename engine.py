@@ -168,14 +168,25 @@ class RIFEONNXEngine:
     def _init_session(self):
         try:
             import onnxruntime as ort
-            # We prefer DirectML for Windows GPUs, then CUDA, then CPU
+            # We prefer DirectML for Windows GPUs (all vendors), then CUDA, then CPU
             providers = [
                 'DmlExecutionProvider', 
                 'CUDAExecutionProvider', 
                 'CPUExecutionProvider'
             ]
-            self.session = ort.InferenceSession(self.model_path, providers=providers)
-            print(f"RIFE Inference session initialized with {self.session.get_providers()}")
+            
+            # Optimization: Enable optimizations and fixed shape if possible
+            sess_options = ort.SessionOptions()
+            sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            
+            self.session = ort.InferenceSession(self.model_path, sess_options=sess_options, providers=providers)
+            
+            used_providers = self.session.get_providers()
+            print(f"RIFE Inference session initialized with: {used_providers}")
+            
+            if 'DmlExecutionProvider' not in used_providers and 'CUDAExecutionProvider' not in used_providers:
+                print("WARNING: RIFE is running on CPU. Performance will be low.")
+                print("HINT: Install 'onnxruntime-directml' for GPU acceleration on Windows.")
         except Exception as e:
             print(f"Error initializing RIFE ONNX session: {e}")
 

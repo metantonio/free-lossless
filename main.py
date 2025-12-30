@@ -4,6 +4,7 @@ import pygame
 import threading
 import time
 import ctypes
+import multiprocessing
 from queue import Queue
 from capture import ScreenCapture
 from engine import RIFEEngine, RIFEONNXEngine
@@ -13,6 +14,51 @@ from filters import AMDFilters, NvidiaAIUpscaler
 import win32gui
 import win32con
 import win32api
+import os
+
+def processing_subroutine(capture_queue, process_queue, engine_config, stop_event):
+    """
+    Standalone subroutine for multiprocessing.
+    """
+    from engine import RIFEEngine, RIFEONNXEngine
+    import cv2
+    import numpy as np
+    
+    # Initialize engine inside the process
+    if engine_config.get("engine_type") == "AI (RIFE ONNX)":
+        engine = RIFEONNXEngine()
+    else:
+        engine = RIFEEngine()
+        
+    if hasattr(engine, 'set_high_precision'):
+        engine.set_high_precision(engine_config.get("ultra_smooth", False))
+
+    fg_enabled = engine_config.get("fg_enabled", True)
+    internal_res = engine_config.get("internal_res", (800, 600))
+    last_frame = None
+
+    print(f"Sub-process processing worker started (PID: {os.getpid()})")
+    
+    while not stop_event.is_set():
+        try:
+            # We use a small timeout to check the stop_event periodically
+            current_frame = capture_queue.get(timeout=0.1)
+            
+            # Internal Scaling
+            h, w = current_frame.shape[:2]
+            if w > internal_res[0] or h > internal_res[1]:
+                current_frame = cv2.resize(current_frame, internal_res, interpolation=cv2.INTER_LINEAR)
+
+            if fg_enabled and last_frame is not None:
+                inter_frame = engine.interpolate(last_frame, current_frame)
+                process_queue.put(inter_frame)
+                process_queue.put(current_frame)
+            else:
+                process_queue.put(current_frame)
+            
+            last_frame = current_frame
+        except:
+            continue
 
 class FrameGenerationApp:
     def __init__(self, target_fps=60):
@@ -22,10 +68,10 @@ class FrameGenerationApp:
         self.running = False
         self.target_window = None
         
-        # Queues for pipeline
-        self.capture_queue = Queue(maxsize=3)
-        self.process_queue = Queue(maxsize=3)
-        self.display_queue = Queue(maxsize=20) # Buffer for smooth display
+        # Queues for pipeline (Use multiprocessing queues for inter-process communication)
+        self.capture_queue = multiprocessing.Queue(maxsize=2)
+        self.process_queue = multiprocessing.Queue(maxsize=3)
+        self.display_queue = Queue(maxsize=5) # Lighter buffer for lower latency
         
         # Stats
         self.frame_count = 0
@@ -90,29 +136,6 @@ class FrameGenerationApp:
                     self.capture_queue.put(frame)
                     last_frame = frame
 
-    def processing_worker(self):
-        print("Processing worker started")
-        last_frame = None
-        while self.running:
-            if not self.capture_queue.empty():
-                current_frame = self.capture_queue.get()
-                
-                # Internal Scaling: Downscale frame if it's too large for processing
-                h, w = current_frame.shape[:2]
-                if w > self.internal_res[0] or h > self.internal_res[1]:
-                    current_frame = cv2.resize(current_frame, self.internal_res, interpolation=cv2.INTER_LINEAR)
-
-                if self.fg_enabled and last_frame is not None:
-                    inter_frame = self.engine.interpolate(last_frame, current_frame)
-                    
-                    self.process_queue.put(inter_frame)
-                    self.process_queue.put(current_frame)
-                else:
-                    self.process_queue.put(current_frame)
-                
-                last_frame = current_frame
-            else:
-                time.sleep(0.001)
 
     def post_processing_worker(self):
         print("Post-processing worker started")
@@ -187,6 +210,11 @@ class FrameGenerationApp:
             self.engine = RIFEEngine()
             
         self.engine.set_high_precision(self.ultra_smooth) if hasattr(self.engine, 'set_high_precision') else None
+        
+        # Adaptive Buffer based on latency selection
+        self.low_latency = self.target_window.get("low_latency", True)
+        display_buf_size = 3 if self.low_latency else 15
+        self.display_queue = Queue(maxsize=display_buf_size)
 
         # Initial region
         rect = WindowSelector.get_window_rect(self.target_window["hwnd"])
@@ -272,16 +300,27 @@ class FrameGenerationApp:
         self.running = True
         self.start_time = time.time()
         
-        # Clear queues
-        while not self.capture_queue.empty(): self.capture_queue.get()
-        while not self.process_queue.empty(): self.process_queue.get()
-        while not self.display_queue.empty(): self.display_queue.get()
+        # Prepare config for sub-process
+        engine_config = {
+            "engine_type": self.target_window.get("engine_type"),
+            "ultra_smooth": self.ultra_smooth,
+            "fg_enabled": self.fg_enabled,
+            "internal_res": self.internal_res
+        }
+        
+        self.stop_event = multiprocessing.Event()
         
         t_cap = threading.Thread(target=self.capture_worker, daemon=True)
-        t_proc = threading.Thread(target=self.processing_worker, daemon=True)
+        # Use multiprocessing for the heavy lifter
+        p_proc = multiprocessing.Process(
+            target=processing_subroutine, 
+            args=(self.capture_queue, self.process_queue, engine_config, self.stop_event),
+            daemon=True
+        )
         t_post = threading.Thread(target=self.post_processing_worker, daemon=True)
+        
         t_cap.start()
-        t_proc.start()
+        p_proc.start()
         t_post.start()
         
         frame_interval = 1.0 / self.target_fps
@@ -311,9 +350,10 @@ class FrameGenerationApp:
                     continue
 
                 # Buffer check: wait for at least 2 frames to be ready to absorb jitter
-                # but only if we are not already in a high-latency state
-                if self.display_queue.qsize() < 2 and self.frame_count > 0:
-                    time.sleep(0.001)
+                # in Low Latency mode, we are more aggressive
+                min_buffer = 1 if self.low_latency else 3
+                if self.display_queue.qsize() < min_buffer and self.frame_count > 0:
+                    time.sleep(0.0005) # Shorter wait
                     continue
 
                 if not self.display_queue.empty():
@@ -395,6 +435,7 @@ class FrameGenerationApp:
             # Removed clock.tick to rely on perf_counter pacing
         finally:
             self.running = False
+            self.stop_event.set() # Stop the sub-process
             self.capture.stop_capture()
             pygame.quit()
         

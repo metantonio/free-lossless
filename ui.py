@@ -95,8 +95,12 @@ class GameSelectorUI:
         self.ultra_smooth_check.grid(row=0, column=0, padx=5)
         
         self.perf_mode_var = tk.BooleanVar(value=False)
-        self.perf_mode_check = tk.Checkbutton(adv_frame, text="Modo Performance (Alta Res)", variable=self.perf_mode_var)
+        self.perf_mode_check = tk.Checkbutton(adv_frame, text="Performance Mode", variable=self.perf_mode_var)
         self.perf_mode_check.grid(row=0, column=1, padx=5)
+        
+        self.low_latency_var = tk.BooleanVar(value=True)
+        self.low_latency_check = tk.Checkbutton(adv_frame, text="Baja Latencia (Buffer Mínimo)", variable=self.low_latency_var)
+        self.low_latency_check.grid(row=1, column=0, columnspan=2, pady=5)
 
         # Sharpening Selection
         sharp_frame = tk.Frame(self.root, pady=5)
@@ -141,7 +145,8 @@ class GameSelectorUI:
                 "fg_enabled": self.fg_var.get(),
                 "engine_type": self.engine_var.get(),
                 "ultra_smooth": self.ultra_smooth_var.get(),
-                "performance_mode": self.perf_mode_var.get()
+                "performance_mode": self.perf_mode_var.get(),
+                "low_latency": self.low_latency_var.get()
             }
             self.root.destroy()
 
