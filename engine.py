@@ -59,22 +59,28 @@ class RIFEEngine:
         
         flow = self.dis.calc(small1, small2, None)
         
-        # 4. Stabilize Flow (Median filter to remove 'jelly' noise)
+        # 4. Stabilize Flow (Advanced Filtering)
+        # Median filter removes outliers, Gaussian smooths transitions
         flow = cv2.medianBlur(flow, 3)
+        flow = cv2.GaussianBlur(flow, (3, 3), 0.5)
         
-        # 5. UI & Text Shield (Protection Mask)
+        # 5. Advanced UI & Text Shield (Protection Mask)
         # a) Static Check: regions that don't change between frames
         diff = cv2.absdiff(small1, small2)
-        static_mask = np.where(diff < 5, 1.0, 0.0).astype(np.float32)
+        # Better thresholding for static areas
+        _, static_mask = cv2.threshold(diff, 8, 1.0, cv2.THRESH_BINARY_INV)
+        static_mask = static_mask.astype(np.float32)
         
-        # b) Edge Check (Text detection): HUDs/Text have high internal contrast
-        edges = cv2.Laplacian(small1, cv2.CV_32F)
-        edge_mask = np.clip(np.abs(edges) / 15.0, 0, 1)
+        # b) Edge Check (Motion Boundary Detection): 
+        # Strong edges in the original frame often shouldn't warp too much if they are UI
+        edges = cv2.Canny(small1, 50, 150)
+        edge_mask = np.clip(edges.astype(np.float32) / 255.0, 0, 1)
         
-        # Combine: protect if it's static OR has text-like edge density
-        # We dampen the flow in these regions
+        # Combine: protect if it's static OR has strong edge density (typical of HUDs)
+        # We use a soft mask to avoid harsh transitions
         protection_mask = np.maximum(static_mask, edge_mask)
-        protection_mask = cv2.GaussianBlur(protection_mask, (3, 3), 0)
+        protection_mask = cv2.dilate(protection_mask, np.ones((3, 3), np.uint8))
+        protection_mask = cv2.GaussianBlur(protection_mask, (5, 5), 0)
         
         # Dampen flow: 0 flow in protected areas
         flow[..., 0] *= (1.0 - protection_mask)
@@ -82,7 +88,7 @@ class RIFEEngine:
 
         # 6. Scale and resize flow
         flow = flow * (1.0 / scale)
-        flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR)
+        flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_CUBIC) # Cubic for smoother upscaling
         
         # 7. Bilateral Warping Logic
         if h != self.last_h or w != self.last_w:
@@ -106,16 +112,20 @@ class RIFEEngine:
         inter1 = cv2.remap(frame1, m1_x, m1_y, cv2.INTER_LINEAR)
         inter2 = cv2.remap(frame2, m2_x, m2_y, cv2.INTER_LINEAR)
         
-        # Adaptive Blending: favor cross-fade in extreme motion
-        blend_mask = np.clip(mag / 20.0, 0, 1) # Threshold 20px
+        # Adaptive Blending: favor cross-fade in extreme motion or flow noise
+        # mag_mask identifies areas with very high displacement
+        blend_mask = np.clip(mag / 30.0, 0, 1.0)
         
+        # Weighted combination: 
+        # In low motion, use full warping. 
+        # In high motion, mix with cross-fade to hide artifacts.
         combined = cv2.addWeighted(inter1, 0.5, inter2, 0.5, 0)
         
-        if np.max(blend_mask) > 0.1:
+        if np.max(blend_mask) > 0.05:
             cross_fade = cv2.addWeighted(frame1, 0.5, frame2, 0.5, 0)
             mask_3c = cv2.merge([blend_mask, blend_mask, blend_mask])
-            # Use slightly less aggressive blending to preserve some motion detail
-            final = combined * (1.0 - mask_3c * 0.3) + cross_fade * (mask_3c * 0.3)
+            # Factor 0.4 ensures we still see some motion even in high-speed areas
+            final = combined * (1.0 - mask_3c * 0.4) + cross_fade * (mask_3c * 0.4)
             return final.astype(np.uint8)
         
         return combined

@@ -6,3 +6,5 @@ numpy==2.0.2
 pygame==2.5.2
 psutil==5.9.8
 pywin32==311
+onnxruntime-gpu
+requests

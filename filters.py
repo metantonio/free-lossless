@@ -1,5 +1,7 @@
 import cv2
 import numpy as np
+import os
+import requests
 
 class AMDFilters:
     @staticmethod
@@ -63,3 +65,61 @@ class AMDFilters:
         
         # Pass 2: Light CAS to restore edge definition lost in scaling
         return AMDFilters.apply_cas(upscaled, sharpness=0.3)
+
+class NvidiaAIUpscaler:
+    def __init__(self, model_path="models/fsrcnn_x2.onnx"):
+        self.model_path = model_path
+        self.session = None
+        self._download_model_if_missing()
+        self._init_session()
+
+    def _download_model_if_missing(self):
+        if not os.path.exists(self.model_path):
+            os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
+            print(f"Downloading AI model to {self.model_path}...")
+            # Using a public lightweight FSRCNN ONNX model
+            url = "https://github.com/onuralpszener/FSRCNN-PyTorch/raw/master/fsrcnn_x2.onnx"
+            try:
+                r = requests.get(url, allow_redirects=True)
+                with open(self.model_path, 'wb') as f:
+                    f.write(r.content)
+                print("Model downloaded successfully.")
+            except Exception as e:
+                print(f"Failed to download model: {e}")
+
+    def _init_session(self):
+        try:
+            import onnxruntime as ort
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            self.session = ort.InferenceSession(self.model_path, providers=providers)
+            print(f"Inference session initialized with {self.session.get_providers()}")
+        except Exception as e:
+            print(f"Error initializing ONNX session: {e}")
+
+    def upscale(self, img):
+        if self.session is None: return img
+        
+        # Pre-process: 1. Convert to YCrCb (SR usually works on Y channel)
+        # However, for simplicity and color, we'll process RGB if model supports it
+        # The FSRCNN model usually expects (B, 1, H, W) for Y-channel
+        # or (B, 3, H, W) for RGB.
+        
+        # Resize to model input if needed (usually AI is fixed scale)
+        # FSRCNN is x2. 
+        # For a general solution, AI is harder. Let's assume the user wants x2
+        # or we just use it for the core upscaling.
+        
+        h, w = img.shape[:2]
+        img_f = img.astype(np.float32) / 255.0
+        
+        # Prepare for ONNX: (H, W, C) -> (1, C, H, W)
+        input_tensor = np.transpose(img_f, (2, 0, 1))[np.newaxis, ...]
+        
+        input_name = self.session.get_inputs()[0].name
+        output = self.session.run(None, {input_name: input_tensor})[0]
+        
+        # Post-process: (1, C, H, W) -> (H, W, C)
+        output = np.transpose(output[0], (1, 2, 0))
+        output = (np.clip(output, 0, 1) * 255).astype(np.uint8)
+        
+        return output

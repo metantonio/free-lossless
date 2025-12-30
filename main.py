@@ -9,7 +9,7 @@ from capture import ScreenCapture
 from engine import RIFEEngine
 from ui import GameSelectorUI
 from selector import WindowSelector
-from filters import AMDFilters
+from filters import AMDFilters, NvidiaAIUpscaler
 import win32gui
 import win32con
 import win32api
@@ -42,6 +42,8 @@ class FrameGenerationApp:
         self.internal_res = (800, 600) # Default target resolution for processing
         self.display_dim = (1280, 720) # Actual output dimensions
         self.fsr_mode = False # Toggle for AMD CAS/EASU
+        self.ai_mode = False # Toggle for NVIDIA AI SuperRes
+        self.ai_upscaler = None
 
     def capture_worker(self):
         print("Capture worker started")
@@ -118,8 +120,15 @@ class FrameGenerationApp:
             if not self.process_queue.empty():
                 frame = self.process_queue.get()
                 
-                # High-Speed Resizing (EASU-style if FSR mode enabled)
-                if self.fsr_mode:
+                # Push to display
+                if self.ai_mode and self.ai_upscaler:
+                    # AI Reconstruction
+                    frame = self.ai_upscaler.upscale(frame)
+                    # Final fit to display if AI output differs
+                    if frame.shape[1] != self.display_dim[0] or frame.shape[0] != self.display_dim[1]:
+                        frame = cv2.resize(frame, self.display_dim, interpolation=cv2.INTER_LINEAR)
+                elif self.fsr_mode:
+                    # High-Speed Resizing (EASU-style if FSR mode enabled)
                     if frame.shape[1] != self.display_dim[0] or frame.shape[0] != self.display_dim[1]:
                         frame = AMDFilters.apply_easu(frame, self.display_dim)
                     else:
@@ -133,7 +142,6 @@ class FrameGenerationApp:
                         blurred = cv2.GaussianBlur(frame, (0, 0), 3)
                         frame = cv2.addWeighted(frame, 1.0 + self.sharpness, blurred, -self.sharpness, 0)
 
-                # Push to display
                 if self.display_queue.full():
                     try: self.display_queue.get_nowait()
                     except: pass
@@ -165,6 +173,9 @@ class FrameGenerationApp:
         elif algo_val == "Lanczos": self.upscale_algo = cv2.INTER_LANCZOS4
         elif "FSR" in algo_val:
             self.fsr_mode = True
+        elif "AI" in algo_val:
+            self.ai_mode = True
+            self.ai_upscaler = NvidiaAIUpscaler()
             
         self.fg_enabled = self.target_window.get("fg_enabled", True)
         
@@ -346,22 +357,25 @@ class FrameGenerationApp:
                     
                     if self.show_fps:
                         status_color = (0, 255, 0)
-                        fps_text = font.render(f"(F11) FPS: {self.current_fps:.1f}", True, status_color)
+                        fps_text = font.render(f"FPS: {self.current_fps:.1f}", True, status_color)
                         fsr_text = font.render(f"(F9) FSR: {'ON' if self.fsr_mode else 'OFF'}", True, (255, 200, 0) if self.fsr_mode else (150, 150, 150))
                         
+                        ai_text = font.render(f"AI SuperRes: {'ON' if self.ai_mode else 'OFF'}", True, (0, 255, 200) if self.ai_mode else (150, 150, 150))
+
                         # Extra status for new modes
                         mode_text_str = "STD"
                         if self.ultra_smooth: mode_text_str = "SMOOTH"
                         mode_text = font.render(f"Mode: {mode_text_str}", True, (0, 200, 255))
 
                         # Draw status box
-                        bg_rect = pygame.Rect(10, 10, 180, 85)
+                        bg_rect = pygame.Rect(10, 10, 200, 110)
                         pygame.draw.rect(screen, (0, 0, 0), bg_rect)
                         pygame.draw.rect(screen, (50, 50, 50), bg_rect, 2)
                         
                         screen.blit(fps_text, (20, 15))
                         screen.blit(fsr_text, (20, 40))
-                        screen.blit(mode_text, (20, 65))
+                        screen.blit(ai_text, (20, 65))
+                        screen.blit(mode_text, (20, 90))
 
                     pygame.display.flip()
                     

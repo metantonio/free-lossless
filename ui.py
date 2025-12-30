@@ -70,7 +70,7 @@ class GameSelectorUI:
         algo_frame.pack()
         tk.Label(algo_frame, text="Algoritmo / FSR: ").grid(row=0, column=0)
         self.algo_var = tk.StringVar(value="Lanczos")
-        self.algo_combo = ttk.Combobox(algo_frame, textvariable=self.algo_var, values=["Bilinear", "Bicubic", "Lanczos", "FSR 1.0 / CAS (Nitidez)"], state="readonly", width=22)
+        self.algo_combo = ttk.Combobox(algo_frame, textvariable=self.algo_var, values=["Bilinear", "Bicubic", "Lanczos", "FSR 1.0 / CAS (Nitidez)", "NVIDIA AI SuperRes"], state="readonly", width=22)
         self.algo_combo.grid(row=0, column=1)
         self.algo_combo.bind("<<ComboboxSelected>>", self._on_algo_change)
 
