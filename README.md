@@ -1,5 +1,7 @@
 # Free Lossless: Open AI Frame Generation
 
+![Logo]()
+
 Free Lossless is a high-performance, non-intrusive Frame Generation tool for Windows. It enhances game fluidity by creating synthetic frames using AI, similar to technologies like DLSS 3 or LSFG, but without requiring any modification to the game's code.
 
 ## How it works (Simple words)
