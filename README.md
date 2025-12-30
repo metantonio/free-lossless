@@ -49,7 +49,7 @@ To create a standalone `.exe`:
 ```powershell
 python build_app.py
 ```
-The executable will be generated in the `dist` folder.
+The executable will be generated in the `dist` folder and will be around 2.63 GB.
 
 ---
 
